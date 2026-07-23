@@ -27,7 +27,10 @@
 
         /* Content Styling (Basic normalization for the book HTML) */
         .book-content img { max-width: 100%; height: auto; display: block; margin: 20px auto; }
-        .book-content h1, .book-content h2, .book-content h3 { font-family: -apple-system, sans-serif; margin-top: 1.5em; color: #333; }
+        .book-content h1, .book-content h2, .book-content h3,
+        .book-content h4, .book-content h5, .book-content h6 { font-family: -apple-system, sans-serif; font-weight: 700; margin-top: 1.5em; color: #111; }
+        .book-content h1 { font-weight: 800; }
+        .book-content h2 { font-weight: 800; }
         .book-content p { margin-bottom: 1.5em; text-align: justify; }
 
         /* Navigation Footer */
@@ -36,14 +39,70 @@
         .nav-btn:hover { background: #3498db; color: white; }
         .nav-btn.disabled { opacity: 0.5; pointer-events: none; border-color: #ccc; color: #ccc; }
 
+        /* Sidebar actions */
+        .sidebar-actions { font-family: -apple-system, sans-serif; margin: 15px 0 20px; display: flex; flex-direction: column; gap: 8px; }
+        .status-line { font-size: 0.85em; color: #666; display: flex; align-items: center; gap: 6px; }
+        .status-pill { font-size: 0.72em; font-weight: bold; text-transform: uppercase; letter-spacing: 0.03em; padding: 2px 8px; border-radius: 999px; }
+        .status-pill.new { background: #eef1f4; color: #6c757d; }
+        .status-pill.in_progress { background: #fff3cd; color: #8a6d00; }
+        .status-pill.read { background: #d1e7dd; color: #0f5132; }
+        .side-btn { font-family: -apple-system, sans-serif; font-size: 0.85em; text-align: left; background: none;
+                    border: 1px solid #dee2e6; border-radius: 4px; padding: 7px 10px; color: #495057; cursor: pointer; }
+        .side-btn:hover { background: #eef1f4; color: #000; }
+
+        /* Top progress bar */
+        #top-progress { position: fixed; top: 0; left: 0; right: 0; height: 4px; background: #e9ecef; z-index: 50; }
+        #top-progress > div { height: 100%; width: 0; background: #d63384; transition: width 0.25s; }
+
+        /* Highlights */
+        .book-content mark.hl { background: #fff2a8; padding: 0 1px; border-radius: 2px; cursor: pointer; box-decoration-break: clone; }
+        .book-content mark.hl:hover { background: #ffe873; }
+
+        /* Floating highlight button */
+        #hl-btn { position: absolute; z-index: 100; display: none; background: #212529; color: #fff; border: none;
+                  border-radius: 6px; padding: 6px 12px; font-family: -apple-system, sans-serif; font-size: 0.85em;
+                  cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.25); }
+        #hl-btn:hover { background: #000; }
+
+        /* Highlights panel */
+        #hl-panel { display: none; font-family: -apple-system, sans-serif; margin-top: 10px; border-top: 1px solid #dee2e6; padding-top: 12px; }
+        #hl-panel.open { display: block; }
+        .hl-item { font-size: 0.82em; color: #495057; border-left: 3px solid #ffe066; padding: 4px 0 4px 8px; margin-bottom: 10px; line-height: 1.4; }
+        .hl-item a { color: #495057; text-decoration: none; display: block; }
+        .hl-item a:hover { color: #000; }
+        .hl-item .hl-ch { display: block; font-size: 0.85em; color: #adb5bd; margin-bottom: 2px; }
+        .hl-empty { font-size: 0.82em; color: #adb5bd; }
+
+        /* Toast */
+        #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #212529; color: #fff;
+                 padding: 10px 18px; border-radius: 6px; font-family: -apple-system, sans-serif; font-size: 0.9em;
+                 opacity: 0; pointer-events: none; transition: opacity 0.2s; z-index: 200; }
+        #toast.show { opacity: 1; }
     </style>
 </head>
 <body>
+
+    <div id="top-progress"><div id="top-progress-fill"></div></div>
 
     <!-- SIDEBAR -->
     <div id="sidebar">
         <a href="/" class="nav-home">← Back to Library</a>
         <div class="nav-header">{{ book.metadata.title }}</div>
+
+        {% set labels = {"new": "New", "in_progress": "In progress", "read": "Read"} %}
+        <div class="sidebar-actions">
+            <div class="status-line">
+                <span id="status-pill" class="status-pill {{ status }}">{{ labels[status] }}</span>
+                <span id="progress-label">{{ progress_pct }}% read</span>
+            </div>
+            <button id="mark-read" class="side-btn"></button>
+            <button id="toggle-highlights" class="side-btn">
+                Highlights (<span id="hl-count">{{ highlights|length }}</span>)
+            </button>
+            <button id="export-md" class="side-btn">⬇ Export Markdown</button>
+        </div>
+
+        <div id="hl-panel"></div>
 
         <!-- Recursive Macro for TOC -->
         {% macro render_toc(items) %}
@@ -110,6 +169,7 @@
 
                 <span style="color: #999; padding: 10px;">
                     Section {{ chapter_index + 1 }} of {{ book.spine|length }}
+                    · <span id="footer-progress">{{ progress_pct }}%</span> read
                 </span>
 
                 {% if next_idx is not none %}
@@ -121,9 +181,20 @@
         </div>
     </div>
 
+    <!-- Floating highlight button + toast -->
+    <button id="hl-btn">✎ Highlight</button>
+    <div id="toast"></div>
+
     <script>
+        // ---- Config passed from server ----
+        const BOOK_ID = "{{ book_id }}";
+        const CHAPTER_INDEX = {{ chapter_index }};
+        const LAST_CHAPTER = {{ last_chapter }};
+        const LAST_SCROLL = {{ last_scroll }};
+        let CHAPTER_HIGHLIGHTS = {{ chapter_highlights | tojson }};
+        let ALL_HIGHLIGHTS = {{ highlights | tojson }};
+
         // Helper to map TOC filenames to Spine Indices
-        // Pass the spine data from python to JS
         const spineMap = {
             {% for ch in book.spine %}
             "{{ ch.href }}": {{ ch.order }},
@@ -131,24 +202,249 @@
         };
 
         function findAndGo(filename) {
-            // The TOC usually has specific filenames e.g. "text/part001.html"
-            // Sometimes it has anchors "text/part001.html#header"
-            // We strip the anchor to find the page index
             const cleanFile = filename.split('#')[0];
-            const anchor = filename.split('#')[1];
-
             const idx = spineMap[cleanFile];
-
             if (idx !== undefined) {
-                let url = "/read/{{ book_id }}/" + idx;
-                // If there was an anchor, we could try to scroll to it,
-                // but simple page loads often lose anchor position without extra JS.
-                // Let's just go to the page.
-                window.location.href = url;
+                window.location.href = "/read/{{ book_id }}/" + idx;
             } else {
                 console.log("Could not find index for", filename);
             }
         }
+
+        // ---- Small utilities ----
+        function toast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.classList.add('show');
+            clearTimeout(t._timer);
+            t._timer = setTimeout(() => t.classList.remove('show'), 1800);
+        }
+
+        const STATUS_LABELS = {new: "New", in_progress: "In progress", read: "Read"};
+
+        function renderStatus(status, progress) {
+            const pct = Math.round(progress * 100);
+            const pill = document.getElementById('status-pill');
+            pill.className = 'status-pill ' + status;
+            pill.textContent = STATUS_LABELS[status];
+            document.getElementById('progress-label').textContent = pct + '% read';
+            document.getElementById('footer-progress').textContent = pct + '%';
+            document.getElementById('top-progress-fill').style.width = pct + '%';
+            updateMarkReadBtn(status);
+        }
+
+        // ---- Progress tracking (scroll-weighted) ----
+        const main = document.getElementById('main');
+
+        function scrollFraction() {
+            const scrollable = main.scrollHeight - main.clientHeight;
+            if (scrollable <= 0) return 1.0; // short chapter fully visible
+            return Math.min(Math.max(main.scrollTop / scrollable, 0), 1);
+        }
+
+        function postProgress(useBeacon) {
+            const body = JSON.stringify({
+                chapter_index: CHAPTER_INDEX,
+                scroll_fraction: scrollFraction()
+            });
+            if (useBeacon && navigator.sendBeacon) {
+                navigator.sendBeacon('/api/progress/' + BOOK_ID,
+                    new Blob([body], {type: 'application/json'}));
+                return;
+            }
+            fetch('/api/progress/' + BOOK_ID, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: body
+            }).then(r => r.json()).then(d => {
+                if (d && d.status) renderStatus(d.status, d.progress);
+            }).catch(() => {});
+        }
+
+        let progressTimer = null;
+        main.addEventListener('scroll', () => {
+            if (progressTimer) return;
+            progressTimer = setTimeout(() => {
+                progressTimer = null;
+                postProgress(false);
+            }, 1500);
+        });
+        window.addEventListener('beforeunload', () => postProgress(true));
+
+        // Restore scroll position when returning to the chapter we left off in.
+        // Wait for full load (images affect scrollHeight) so the fraction maps
+        // to the right pixel offset.
+        function restoreScroll() {
+            if (CHAPTER_INDEX === LAST_CHAPTER && LAST_SCROLL > 0) {
+                const scrollable = main.scrollHeight - main.clientHeight;
+                if (scrollable > 0) main.scrollTop = LAST_SCROLL * scrollable;
+            }
+            // Record current position (also covers short chapters that never scroll).
+            postProgress(false);
+        }
+        if (document.readyState === 'complete') {
+            restoreScroll();
+        } else {
+            window.addEventListener('load', restoreScroll);
+        }
+
+        // ---- Mark as read / unread ----
+        function updateMarkReadBtn(status) {
+            const btn = document.getElementById('mark-read');
+            if (status === 'read') {
+                btn.textContent = '↺ Mark as unread';
+                btn.dataset.next = 'null';
+            } else {
+                btn.textContent = '✓ Mark as read';
+                btn.dataset.next = 'read';
+            }
+        }
+        document.getElementById('mark-read').addEventListener('click', () => {
+            const next = document.getElementById('mark-read').dataset.next;
+            fetch('/api/status/' + BOOK_ID, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({status: next === 'null' ? null : 'read'})
+            }).then(r => r.json()).then(d => {
+                renderStatus(d.status, d.progress);
+                toast(d.status === 'read' ? 'Marked as read' : 'Marked as unread');
+            });
+        });
+
+        // ---- Export ----
+        document.getElementById('export-md').addEventListener('click', () => {
+            window.location.href = '/api/export/' + BOOK_ID;
+        });
+
+        // ---- Highlights panel ----
+        const panel = document.getElementById('hl-panel');
+        document.getElementById('toggle-highlights').addEventListener('click', () => {
+            panel.classList.toggle('open');
+            if (panel.classList.contains('open')) renderPanel();
+        });
+
+        function renderPanel() {
+            document.getElementById('hl-count').textContent = ALL_HIGHLIGHTS.length;
+            if (!ALL_HIGHLIGHTS.length) {
+                panel.innerHTML = '<div class="hl-empty">No highlights yet. Select text to add one.</div>';
+                return;
+            }
+            panel.innerHTML = ALL_HIGHLIGHTS.map(h => {
+                const snippet = h.text.length > 140 ? h.text.slice(0, 140) + '…' : h.text;
+                return '<div class="hl-item"><a href="/read/' + BOOK_ID + '/' + h.chapter + '">' +
+                    '<span class="hl-ch">' + escapeHtml(h.chapter_title || ('Section ' + (h.chapter + 1))) + '</span>' +
+                    escapeHtml(snippet) + '</a></div>';
+            }).join('');
+        }
+
+        function escapeHtml(s) {
+            const d = document.createElement('div');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
+        // ---- Highlighting: create on selection ----
+        const content = document.querySelector('.book-content');
+        const hlBtn = document.getElementById('hl-btn');
+        let pendingRange = null;
+
+        content.addEventListener('mouseup', () => {
+            const sel = window.getSelection();
+            if (!sel || sel.isCollapsed) { hlBtn.style.display = 'none'; return; }
+            const text = sel.toString().trim();
+            if (!text) { hlBtn.style.display = 'none'; return; }
+            // Only handle selections that live inside the content area.
+            const range = sel.getRangeAt(0);
+            if (!content.contains(range.commonAncestorContainer)) { hlBtn.style.display = 'none'; return; }
+            pendingRange = range.cloneRange();
+            const rect = range.getBoundingClientRect();
+            hlBtn.style.display = 'block';
+            // Anchor to the top-left corner of the selection, sitting just above it.
+            hlBtn.style.top = (window.scrollY + rect.top - hlBtn.offsetHeight - 8) + 'px';
+            hlBtn.style.left = (window.scrollX + rect.left) + 'px';
+        });
+
+        document.addEventListener('mousedown', (e) => {
+            if (e.target !== hlBtn) hlBtn.style.display = 'none';
+        });
+
+        hlBtn.addEventListener('click', () => {
+            if (!pendingRange) return;
+            const text = pendingRange.toString().trim();
+            hlBtn.style.display = 'none';
+            fetch('/api/highlights/' + BOOK_ID, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({chapter: CHAPTER_INDEX, text: text})
+            }).then(r => r.json()).then(h => {
+                try { wrapRange(pendingRange, h.id); } catch (e) { /* fall back to reload look */ }
+                window.getSelection().removeAllRanges();
+                pendingRange = null;
+                ALL_HIGHLIGHTS.push(h);
+                CHAPTER_HIGHLIGHTS.push(h);
+                renderPanel();
+                toast('Highlight saved');
+            }).catch(() => toast('Could not save highlight'));
+        });
+
+        function wrapRange(range, id) {
+            const mark = document.createElement('mark');
+            mark.className = 'hl';
+            mark.dataset.id = id;
+            // surroundContents throws on ranges spanning element boundaries;
+            // fall back to extract+insert which handles most multi-node cases.
+            try {
+                range.surroundContents(mark);
+            } catch (e) {
+                const frag = range.extractContents();
+                mark.appendChild(frag);
+                range.insertNode(mark);
+            }
+        }
+
+        // ---- Highlighting: remove on click ----
+        content.addEventListener('click', (e) => {
+            const mark = e.target.closest('mark.hl');
+            if (!mark) return;
+            if (!confirm('Remove this highlight?')) return;
+            const id = mark.dataset.id;
+            fetch('/api/highlights/' + BOOK_ID + '/' + id, {method: 'DELETE'})
+                .then(r => {
+                    if (!r.ok) throw new Error();
+                    // Unwrap the mark.
+                    const parent = mark.parentNode;
+                    while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+                    parent.removeChild(mark);
+                    parent.normalize();
+                    ALL_HIGHLIGHTS = ALL_HIGHLIGHTS.filter(h => h.id !== id);
+                    CHAPTER_HIGHLIGHTS = CHAPTER_HIGHLIGHTS.filter(h => h.id !== id);
+                    renderPanel();
+                    toast('Highlight removed');
+                }).catch(() => toast('Could not remove highlight'));
+        });
+
+        // ---- Re-apply saved highlights for this chapter on load ----
+        // Pragmatic: wraps the first occurrence of each stored passage found
+        // within a single text node. Multi-node selections may not re-wrap
+        // visually but remain stored and are still exported correctly.
+        function reapplyHighlights() {
+            CHAPTER_HIGHLIGHTS.forEach(h => {
+                if (!h.text) return;
+                const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, null);
+                let node;
+                while ((node = walker.nextNode())) {
+                    if (node.parentNode.closest('mark.hl')) continue; // already marked
+                    const idx = node.nodeValue.indexOf(h.text);
+                    if (idx === -1) continue;
+                    const range = document.createRange();
+                    range.setStart(node, idx);
+                    range.setEnd(node, idx + h.text.length);
+                    try { wrapRange(range, h.id); } catch (e) {}
+                    break;
+                }
+            });
+        }
+        reapplyHighlights();
     </script>
 </body>
 </html>
