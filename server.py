@@ -164,6 +164,7 @@ async def library_view(request: Request):
                 book = load_book_cached(item)
                 if book:
                     state = load_state(item)
+                    highlights = state.get("highlights") or []
                     books.append({
                         "id": item,
                         "title": book.metadata.title,
@@ -171,7 +172,8 @@ async def library_view(request: Request):
                         "chapters": len(book.spine),
                         "status": derive_status(state),
                         "progress": round((state.get("progress") or 0.0) * 100),
-                        "highlights": len(state.get("highlights") or []),
+                        "highlights": len(highlights),
+                        "highlights_list": highlights,
                         "last_chapter": state.get("last_chapter", 0),
                     })
 
@@ -287,6 +289,12 @@ async def set_status(book_id: str, body: StatusBody):
         raise HTTPException(status_code=400, detail="status must be 'read' or null")
     state = load_state(book_id)
     state["status"] = body.status
+    # Marking unread must also clear progress; otherwise derive_status() would
+    # re-derive "read" from a finished book's progress and the toggle would appear to do nothing.
+    if body.status is None:
+        state["progress"] = 0.0
+        state["last_chapter"] = 0
+        state["last_scroll"] = 0.0
     save_state(book_id, state)
     return {"progress": state.get("progress", 0.0), "status": derive_status(state)}
 
