@@ -318,19 +318,36 @@
             }).catch(() => toast('Could not save highlight'));
         });
 
+        // Wrap a range by marking each text node it touches with its own
+        // inline <mark>. Wrapping a multi-block selection in one <mark>
+        // doesn't work: an inline element around block children only paints
+        // its background in the gaps between them, not over the text.
         function wrapRange(range, id) {
-            const mark = document.createElement('mark');
-            mark.className = 'hl';
-            mark.dataset.id = id;
-            // surroundContents throws on ranges spanning element boundaries;
-            // fall back to extract+insert which handles most multi-node cases.
-            try {
-                range.surroundContents(mark);
-            } catch (e) {
-                const frag = range.extractContents();
-                mark.appendChild(frag);
-                range.insertNode(mark);
+            if (range.collapsed) return;
+            const root = range.commonAncestorContainer;
+            const scope = root.nodeType === Node.TEXT_NODE ? root.parentNode : root;
+            const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, null);
+            const nodes = [];
+            let node;
+            while ((node = walker.nextNode())) {
+                if (range.intersectsNode(node)) nodes.push(node);
             }
+            nodes.forEach(tn => {
+                if (tn.parentNode.closest && tn.parentNode.closest('mark.hl')) return;
+                const start = tn === range.startContainer ? range.startOffset : 0;
+                const end = tn === range.endContainer ? range.endOffset : tn.nodeValue.length;
+                if (end <= start) return;
+                // Skip whitespace-only segments (e.g. newlines between blocks),
+                // which would otherwise render as tiny yellow slivers in the margins.
+                if (!tn.nodeValue.slice(start, end).trim()) return;
+                const r = document.createRange();
+                r.setStart(tn, start);
+                r.setEnd(tn, end);
+                const mark = document.createElement('mark');
+                mark.className = 'hl';
+                mark.dataset.id = id;
+                try { r.surroundContents(mark); } catch (e) {}
+            });
         }
 
         // ---- Highlighting: remove on click ----
@@ -342,11 +359,13 @@
             fetch('/api/highlights/' + BOOK_ID + '/' + id, {method: 'DELETE'})
                 .then(r => {
                     if (!r.ok) throw new Error();
-                    // Unwrap the mark.
-                    const parent = mark.parentNode;
-                    while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
-                    parent.removeChild(mark);
-                    parent.normalize();
+                    // A highlight can be several <mark>s (one per text node); unwrap them all.
+                    content.querySelectorAll('mark.hl[data-id="' + CSS.escape(id) + '"]').forEach(m => {
+                        const parent = m.parentNode;
+                        while (m.firstChild) parent.insertBefore(m.firstChild, m);
+                        parent.removeChild(m);
+                        parent.normalize();
+                    });
                     ALL_HIGHLIGHTS = ALL_HIGHLIGHTS.filter(h => h.id !== id);
                     CHAPTER_HIGHLIGHTS = CHAPTER_HIGHLIGHTS.filter(h => h.id !== id);
                     toast('Highlight removed');
@@ -354,24 +373,42 @@
         });
 
         // ---- Re-apply saved highlights for this chapter on load ----
-        // Pragmatic: wraps the first occurrence of each stored passage found
-        // within a single text node. Multi-node selections may not re-wrap
-        // visually but remain stored and are still exported correctly.
+        // Locate the first occurrence of each stored passage, even when it
+        // spans multiple text nodes (e.g. across a paragraph and a list), by
+        // searching over the concatenated text of the content area.
+        function findRange(text) {
+            const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, null);
+            const nodes = [];
+            let full = '';
+            let node;
+            while ((node = walker.nextNode())) {
+                if (node.parentNode.closest('mark.hl')) continue; // skip already-marked
+                nodes.push({node, offset: full.length});
+                full += node.nodeValue;
+            }
+            const idx = full.indexOf(text);
+            if (idx === -1) return null;
+            const end = idx + text.length;
+            let startNode, startOffset, endNode, endOffset;
+            for (const {node, offset} of nodes) {
+                const nodeEnd = offset + node.nodeValue.length;
+                if (startNode === undefined && idx < nodeEnd) {
+                    startNode = node; startOffset = idx - offset;
+                }
+                if (end <= nodeEnd) { endNode = node; endOffset = end - offset; break; }
+            }
+            if (startNode === undefined || endNode === undefined) return null;
+            const range = document.createRange();
+            range.setStart(startNode, startOffset);
+            range.setEnd(endNode, endOffset);
+            return range;
+        }
+
         function reapplyHighlights() {
             CHAPTER_HIGHLIGHTS.forEach(h => {
                 if (!h.text) return;
-                const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, null);
-                let node;
-                while ((node = walker.nextNode())) {
-                    if (node.parentNode.closest('mark.hl')) continue; // already marked
-                    const idx = node.nodeValue.indexOf(h.text);
-                    if (idx === -1) continue;
-                    const range = document.createRange();
-                    range.setStart(node, idx);
-                    range.setEnd(node, idx + h.text.length);
-                    try { wrapRange(range, h.id); } catch (e) {}
-                    break;
-                }
+                const range = findRange(h.text);
+                if (range) { try { wrapRange(range, h.id); } catch (e) {} }
             });
         }
         reapplyHighlights();
