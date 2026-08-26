@@ -10,6 +10,7 @@
     --card-bg: #ffffff;
     --text: #1a1a1a;
     --text-muted: #6b6b6b;
+    --text-faint: #a8a49b;
     --border: #e5e3e0;
     --border-strong: #d8d5d0;
 
@@ -52,6 +53,7 @@
     --card-bg: #262626;
     --text: #e8e8e6;
     --text-muted: #9a9a9a;
+    --text-faint: #6a6a6a;
     --border: #333333;
     --border-strong: #3d3d3d;
 
@@ -93,6 +95,7 @@
         --card-bg: #262626;
         --text: #e8e8e6;
         --text-muted: #9a9a9a;
+        --text-faint: #6a6a6a;
         --border: #333333;
         --border-strong: #3d3d3d;
 
