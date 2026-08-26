@@ -66,6 +66,7 @@ class Book:
     source_file: str
     processed_at: str
     version: str = "3.0"
+    cover_image: Optional[str] = None  # "images/<name>", set if a cover was detected
 
 
 # --- Utilities ---
@@ -195,6 +196,105 @@ def extract_metadata_robust(book_obj) -> BookMetadata:
     )
 
 
+def _first_img_src(soup: BeautifulSoup) -> Optional[str]:
+    """First image reference in a parsed HTML page, checking both plain
+    <img src> and the SVG-wrapped <image xlink:href> some EPUBs use for
+    fixed-size cover pages."""
+    img = soup.find('img')
+    if img and img.get('src'):
+        return img['src']
+    image = soup.find('image')
+    if image:
+        return image.get('xlink:href') or image.get('href')
+    return None
+
+
+def _resolve_image(src: str, image_map: Dict[str, str]) -> Optional[str]:
+    """Look up a (possibly URL-encoded) image src/href in the extracted image map."""
+    if not src:
+        return None
+    src_decoded = unquote(src)
+    filename = os.path.basename(src_decoded)
+    if src_decoded in image_map:
+        return image_map[src_decoded]
+    if filename in image_map:
+        return image_map[filename]
+    return None
+
+
+def find_cover_image(book_obj, image_map: Dict[str, str]) -> Optional[str]:
+    """Best-effort detection of an EPUB's cover image, returning its already-
+    extracted local path (a value from `image_map`) or None if nothing matches.
+
+    No single ebooklib API reliably yields a cover across real-world EPUBs, so
+    this tries several conventions in order, stopping at the first hit:
+      1. EPUB3 manifest cover (properties="cover-image" -> ebooklib.ITEM_COVER)
+      2. EPUB2 <meta name="cover" content="ID"/>
+      3. The OPF <guide> entry with type="cover" (may point at an image
+         directly, or at an HTML title page containing the cover <img>)
+      4. An image item whose filename contains "cover"
+      5. The first <img> in the first spine document, as a last resort
+    """
+    # 1. EPUB3 manifest cover
+    for item in book_obj.get_items():
+        if item.get_type() == ebooklib.ITEM_COVER:
+            resolved = _resolve_image(item.get_name(), image_map)
+            if resolved:
+                return resolved
+
+    # 2. EPUB2 <meta name="cover">
+    cover_meta = book_obj.get_metadata('OPF', 'cover')
+    if cover_meta:
+        _, others = cover_meta[0]
+        item = book_obj.get_item_with_id(others.get('content', ''))
+        if item:
+            resolved = _resolve_image(item.get_name(), image_map)
+            if resolved:
+                return resolved
+
+    # 3. <guide> entry of type "cover"
+    for entry in getattr(book_obj, 'guide', None) or []:
+        if entry.get('type') != 'cover':
+            continue
+        href = entry.get('href', '')
+        resolved = _resolve_image(href, image_map)
+        if resolved:
+            return resolved
+        # Might point at an HTML page (e.g. titlepage.xhtml) rather than an image directly.
+        item = book_obj.get_item_with_href(href) if hasattr(book_obj, 'get_item_with_href') else None
+        if item is None:
+            href_name = os.path.basename(unquote(href))
+            item = next((i for i in book_obj.get_items() if os.path.basename(i.get_name()) == href_name), None)
+        if item and item.get_type() == ebooklib.ITEM_DOCUMENT:
+            soup = BeautifulSoup(item.get_content().decode('utf-8', errors='ignore'), 'html.parser')
+            src = _first_img_src(soup)
+            if src:
+                resolved = _resolve_image(src, image_map)
+                if resolved:
+                    return resolved
+
+    # 4. Filename heuristic
+    for item in book_obj.get_items():
+        if item.get_type() in (ebooklib.ITEM_IMAGE, ebooklib.ITEM_COVER) and 'cover' in item.get_name().lower():
+            resolved = _resolve_image(item.get_name(), image_map)
+            if resolved:
+                return resolved
+
+    # 5. First image in the first spine document
+    if book_obj.spine:
+        item_id, _linear = book_obj.spine[0]
+        item = book_obj.get_item_with_id(item_id)
+        if item and item.get_type() == ebooklib.ITEM_DOCUMENT:
+            soup = BeautifulSoup(item.get_content().decode('utf-8', errors='ignore'), 'html.parser')
+            src = _first_img_src(soup)
+            if src:
+                resolved = _resolve_image(src, image_map)
+                if resolved:
+                    return resolved
+
+    return None
+
+
 # --- Main Conversion Logic ---
 
 def process_epub(epub_path: str, output_dir: str) -> Book:
@@ -207,9 +307,14 @@ def process_epub(epub_path: str, output_dir: str) -> Book:
     metadata = extract_metadata_robust(book)
 
     # 3. Prepare Output Directories
-    if os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
+    # Only clear the images/ subdirectory (fully regenerated below) --
+    # never rmtree the whole output_dir. state.json (reading progress,
+    # highlights, notes -- see server.py's load_state/save_state) lives
+    # alongside book.pkl in this same directory, and reprocessing an
+    # already-read book must not destroy it.
     images_dir = os.path.join(output_dir, 'images')
+    if os.path.exists(images_dir):
+        shutil.rmtree(images_dir)
     os.makedirs(images_dir, exist_ok=True)
 
     # 4. Extract Images & Build Map
@@ -217,7 +322,11 @@ def process_epub(epub_path: str, output_dir: str) -> Book:
     image_map = {} # Key: internal_path, Value: local_relative_path
 
     for item in book.get_items():
-        if item.get_type() == ebooklib.ITEM_IMAGE:
+        # ITEM_COVER is a distinct type ebooklib assigns to EPUB3 manifest
+        # covers (properties="cover-image") -- without it, those images
+        # were silently dropped from the map even though chapter HTML
+        # (e.g. a title page) can still reference them.
+        if item.get_type() in (ebooklib.ITEM_IMAGE, ebooklib.ITEM_COVER):
             # Normalize filename
             original_fname = os.path.basename(item.get_name())
             # Sanitize filename for OS
@@ -295,14 +404,19 @@ def process_epub(epub_path: str, output_dir: str) -> Book:
             )
             spine_chapters.append(chapter)
 
-    # 7. Final Assembly
+    # 7. Detect cover image
+    print("Detecting cover image...")
+    cover_image = find_cover_image(book, image_map)
+
+    # 8. Final Assembly
     final_book = Book(
         metadata=metadata,
         spine=spine_chapters,
         toc=toc_structure,
         images=image_map,
         source_file=os.path.basename(epub_path),
-        processed_at=datetime.now().isoformat()
+        processed_at=datetime.now().isoformat(),
+        cover_image=cover_image
     )
 
     return final_book

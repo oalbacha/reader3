@@ -1,6 +1,7 @@
 import os
 import json
 import pickle
+import shutil
 import uuid
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -21,6 +22,9 @@ templates = Jinja2Templates(directory="templates")
 
 # Where are the book folders located?
 BOOKS_DIR = "."
+
+# Soft-deleted books are moved here rather than permanently erased.
+TRASH_DIR = os.path.join(BOOKS_DIR, ".trash")
 
 # Progress fraction at/above which a book counts as "read".
 READ_THRESHOLD = 0.95
@@ -172,6 +176,7 @@ async def library_view(request: Request):
                 if book:
                     state = load_state(item)
                     highlights = state.get("highlights") or []
+                    cover_image = getattr(book, "cover_image", None)
                     books.append({
                         "id": item,
                         "title": book.metadata.title,
@@ -182,6 +187,7 @@ async def library_view(request: Request):
                         "highlights": len(highlights),
                         "highlights_list": highlights,
                         "last_chapter": state.get("last_chapter", 0),
+                        "cover_url": f"/read/{item}/{cover_image}" if cover_image else None,
                     })
 
     # Show in-progress books first, then new, then finished.
@@ -414,6 +420,25 @@ async def export_highlights(book_id: str):
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{safe_name} highlights.md"'},
     )
+
+
+@app.post("/api/remove/{book_id}")
+async def remove_book(book_id: str):
+    """Soft-delete: move the book's data folder into .trash/ instead of
+    permanently erasing it, so it stays recoverable. The source .epub file
+    (which lives outside this folder) is never touched.
+    """
+    book_dir = _safe_book_dir(book_id)
+    if not os.path.isdir(book_dir):
+        raise HTTPException(status_code=404, detail="Book not found")
+    os.makedirs(TRASH_DIR, exist_ok=True)
+    safe_id = os.path.basename(book_id)
+    dest = os.path.join(TRASH_DIR, safe_id)
+    if os.path.exists(dest):
+        dest = os.path.join(TRASH_DIR, f"{safe_id}__{uuid.uuid4().hex[:8]}")
+    shutil.move(book_dir, dest)
+    load_book_cached.cache_clear()
+    return {"ok": True}
 
 
 if __name__ == "__main__":
