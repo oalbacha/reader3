@@ -151,6 +151,11 @@ class HighlightBody(BaseModel):
     note: str = ""
 
 
+class NoteBody(BaseModel):
+    chapter: int
+    text: str
+
+
 @app.get("/", response_class=HTMLResponse)
 async def library_view(request: Request):
     """Lists all available processed books."""
@@ -311,12 +316,39 @@ async def add_highlight(book_id: str, body: HighlightBody):
         "chapter_title": chapter_title(book, body.chapter),
         "text": text,
         "note": body.note or "",
+        "kind": "highlight",
         "ts": datetime.now(timezone.utc).isoformat(),
     }
     state = load_state(book_id)
     state["highlights"].append(highlight)
     save_state(book_id, state)
     return highlight
+
+
+@app.post("/api/notes/{book_id}")
+async def add_note(book_id: str, body: NoteBody):
+    """A standalone free-text note, not tied to any quoted passage.
+
+    Stored in the same list as highlights (kind="note") so it slots into
+    the existing chapter grouping, Library panel, and export unchanged.
+    """
+    book = _require_book(book_id)
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty note")
+    note = {
+        "id": "n_" + uuid.uuid4().hex[:10],
+        "chapter": body.chapter,
+        "chapter_title": chapter_title(book, body.chapter),
+        "text": text,
+        "note": "",
+        "kind": "note",
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    state = load_state(book_id)
+    state["highlights"].append(note)
+    save_state(book_id, state)
+    return note
 
 
 @app.delete("/api/highlights/{book_id}/{highlight_id}")
@@ -357,6 +389,9 @@ async def export_highlights(book_id: str):
             heading = items[0].get("chapter_title") or chapter_title(book, ch_idx)
             lines += [f"## {heading}", ""]
             for h in items:
+                if h.get("kind") == "note":
+                    lines += [h.get("text") or "", ""]
+                    continue
                 quote = (h.get("text") or "").replace("\n", "\n> ")
                 lines += [f"> {quote}", ""]
                 if h.get("note"):

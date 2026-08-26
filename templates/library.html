@@ -40,10 +40,15 @@
         /* Highlights panel (per card, toggled) */
         .hl-panel { display: none; border-top: 1px solid #eee; margin-top: 4px; margin-bottom: 12px; padding-top: 10px; }
         .hl-panel.open { display: block; }
-        .hl-item { font-size: 0.82em; color: #495057; border-left: 3px solid #ffe066; padding: 4px 0 4px 8px; margin-bottom: 10px; line-height: 1.4; }
-        .hl-item a { color: #495057; text-decoration: none; display: block; }
+        .hl-item { font-size: 0.82em; color: #495057; border-left: 3px solid #ffe066; padding: 4px 8px 4px 8px; margin-bottom: 10px; line-height: 1.4;
+                   display: flex; align-items: flex-start; gap: 6px; }
+        .hl-item.note { border-left-color: #74c0fc; }
+        .hl-item a { color: #495057; text-decoration: none; display: block; flex: 1 1 auto; min-width: 0; }
         .hl-item a:hover { color: #000; }
         .hl-item .hl-ch { display: block; font-size: 0.85em; color: #adb5bd; margin-bottom: 2px; }
+        .hl-item .hl-tag { display: inline-block; font-size: 0.72em; font-weight: bold; color: #1c7ed6; margin-right: 4px; }
+        .hl-item .hl-del { flex: 0 0 auto; background: none; border: none; color: #adb5bd; cursor: pointer; font-size: 1em; line-height: 1; padding: 2px; }
+        .hl-item .hl-del:hover { color: #d63384; }
         .hl-empty { font-size: 0.82em; color: #adb5bd; }
 
         /* Toast */
@@ -159,20 +164,48 @@
                 window.location.href = '/api/export/' + bookId;
             });
 
-            // ---- Highlights panel ----
+            // ---- Highlights panel (highlights + notes) ----
             const panel = card.querySelector('[data-role="hl-panel"]');
-            const highlights = JSON.parse(panel.dataset.highlights || '[]');
-            card.querySelector('[data-role="toggle-highlights"]').addEventListener('click', () => {
+            let highlights = JSON.parse(panel.dataset.highlights || '[]');
+            const countEl = card.querySelector('[data-role="hl-count"]');
+            const toggleBtn = card.querySelector('[data-role="toggle-highlights"]');
+
+            function renderPanel() {
+                panel.innerHTML = highlights.map(h => {
+                    const isNote = h.kind === 'note';
+                    const snippet = h.text.length > 140 ? h.text.slice(0, 140) + '…' : h.text;
+                    return '<div class="hl-item' + (isNote ? ' note' : '') + '" data-id="' + h.id + '">' +
+                        '<a href="/read/' + bookId + '/' + h.chapter + '">' +
+                        '<span class="hl-ch">' + (isNote ? '<span class="hl-tag">NOTE</span>' : '') +
+                        escapeHtml(h.chapter_title || ('Section ' + (h.chapter + 1))) + '</span>' +
+                        escapeHtml(snippet) + '</a>' +
+                        '<button type="button" class="hl-del" data-role="hl-del" title="Delete">✕</button>' +
+                        '</div>';
+                }).join('') || '<div class="hl-empty">No highlights yet.</div>';
+                panel.dataset.rendered = '1';
+            }
+
+            toggleBtn.addEventListener('click', () => {
                 panel.classList.toggle('open');
-                if (panel.classList.contains('open') && !panel.dataset.rendered) {
-                    panel.innerHTML = highlights.map(h => {
-                        const snippet = h.text.length > 140 ? h.text.slice(0, 140) + '…' : h.text;
-                        return '<div class="hl-item"><a href="/read/' + bookId + '/' + h.chapter + '">' +
-                            '<span class="hl-ch">' + escapeHtml(h.chapter_title || ('Section ' + (h.chapter + 1))) + '</span>' +
-                            escapeHtml(snippet) + '</a></div>';
-                    }).join('') || '<div class="hl-empty">No highlights yet.</div>';
-                    panel.dataset.rendered = '1';
-                }
+                if (panel.classList.contains('open') && !panel.dataset.rendered) renderPanel();
+            });
+
+            panel.addEventListener('click', (e) => {
+                const btn = e.target.closest('[data-role="hl-del"]');
+                if (!btn) return;
+                e.preventDefault();
+                const item = btn.closest('.hl-item');
+                const id = item.dataset.id;
+                if (!confirm('Delete this item?')) return;
+                fetch('/api/highlights/' + bookId + '/' + id, {method: 'DELETE'})
+                    .then(r => {
+                        if (!r.ok) throw new Error();
+                        highlights = highlights.filter(h => h.id !== id);
+                        renderPanel();
+                        countEl.textContent = highlights.length;
+                        if (!highlights.length) toggleBtn.disabled = true;
+                        toast('Deleted');
+                    }).catch(() => toast('Could not delete'));
             });
         });
     </script>

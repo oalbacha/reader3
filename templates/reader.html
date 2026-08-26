@@ -70,6 +70,20 @@
         .status-pill.in_progress { background: #fff3cd; color: #8a6d00; }
         .status-pill.read { background: #d1e7dd; color: #0f5132; }
 
+        /* Add-note */
+        .note-btn { align-self: flex-start; background: #f4f4f9; border: 1px solid #dee2e6; border-radius: 4px;
+                    color: #495057; font-family: -apple-system, sans-serif; font-size: 0.82em; padding: 5px 10px; cursor: pointer; }
+        .note-btn:hover { background: #eef1f4; color: #000; border-color: #ced4da; }
+        .note-form { display: none; flex-direction: column; gap: 6px; }
+        .note-form.open { display: flex; }
+        .note-form textarea { width: 100%; box-sizing: border-box; min-height: 70px; resize: vertical; font-family: -apple-system, sans-serif;
+                               font-size: 0.85em; padding: 8px; border: 1px solid #dee2e6; border-radius: 4px; }
+        .note-form-actions { display: flex; justify-content: flex-end; gap: 6px; }
+        .note-form-actions button { font-family: -apple-system, sans-serif; font-size: 0.8em; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
+        #note-cancel { background: #fff; border: 1px solid #dee2e6; color: #495057; }
+        #note-save { background: #212529; border: 1px solid #212529; color: #fff; }
+        #note-save:hover { background: #000; }
+
         /* Top progress bar */
         #top-progress { position: fixed; top: 0; left: 0; right: 0; height: 4px; background: #e9ecef; z-index: 50; }
         #top-progress > div { height: 100%; width: 0; background: #d63384; transition: width 0.25s; }
@@ -104,6 +118,7 @@
         <div id="sidebar-icons">
             <button type="button" class="sidebar-icon-btn" id="icon-home" title="Back to Library">←</button>
             <button type="button" class="sidebar-icon-btn" id="icon-toc" title="Contents">☰</button>
+            <button type="button" class="sidebar-icon-btn" id="icon-note" title="Add note">✎</button>
         </div>
         <div class="nav-header">{{ book.metadata.title }}</div>
 
@@ -112,6 +127,14 @@
             <div class="status-line">
                 <span id="status-pill" class="status-pill {{ status }}">{{ labels[status] }}</span>
                 <span id="progress-label">{{ progress_pct }}% read</span>
+            </div>
+            <button type="button" id="note-btn" class="note-btn">+ Note</button>
+            <div id="note-form" class="note-form">
+                <textarea id="note-text" placeholder="Write a note for this section…"></textarea>
+                <div class="note-form-actions">
+                    <button type="button" id="note-cancel">Cancel</button>
+                    <button type="button" id="note-save">Save</button>
+                </div>
             </div>
         </div>
 
@@ -224,67 +247,6 @@
             }
         }
 
-        // ---- Sidebar: resize + collapse to icon rail ----
-        const sidebar = document.getElementById('sidebar');
-        const sidebarResizer = document.getElementById('sidebar-resizer');
-        const sidebarToggle = document.getElementById('sidebar-toggle');
-        const SIDEBAR_MIN = 180;
-        const SIDEBAR_MAX = 500;
-        const SIDEBAR_DEFAULT = 300;
-
-        function setToggleLabel() {
-            sidebarToggle.textContent = sidebar.classList.contains('collapsed') ? '»' : '«';
-            sidebarToggle.title = sidebar.classList.contains('collapsed') ? 'Expand sidebar' : 'Collapse sidebar';
-        }
-
-        function collapseSidebar() {
-            sidebar.classList.add('collapsed');
-            localStorage.setItem('sidebarCollapsed', '1');
-            setToggleLabel();
-        }
-
-        function expandSidebar() {
-            sidebar.classList.remove('collapsed');
-            localStorage.setItem('sidebarCollapsed', '0');
-            setToggleLabel();
-        }
-
-        // Restore saved width/collapsed state.
-        const savedWidth = parseInt(localStorage.getItem('sidebarWidth'), 10);
-        sidebar.style.width = (savedWidth >= SIDEBAR_MIN && savedWidth <= SIDEBAR_MAX ? savedWidth : SIDEBAR_DEFAULT) + 'px';
-        if (localStorage.getItem('sidebarCollapsed') === '1') sidebar.classList.add('collapsed');
-        setToggleLabel();
-
-        sidebarToggle.addEventListener('click', () => {
-            if (sidebar.classList.contains('collapsed')) expandSidebar(); else collapseSidebar();
-        });
-        document.getElementById('icon-home').addEventListener('click', () => { window.location.href = '/'; });
-        document.getElementById('icon-toc').addEventListener('click', () => {
-            expandSidebar();
-            document.querySelector('ul.toc-list').scrollIntoView({block: 'nearest'});
-        });
-
-        let resizing = false;
-        sidebarResizer.addEventListener('mousedown', (e) => {
-            if (sidebar.classList.contains('collapsed')) return;
-            resizing = true;
-            sidebar.classList.add('no-transition');
-            document.body.style.userSelect = 'none';
-            e.preventDefault();
-        });
-        document.addEventListener('mousemove', (e) => {
-            if (!resizing) return;
-            const width = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, e.clientX));
-            sidebar.style.width = width + 'px';
-        });
-        document.addEventListener('mouseup', () => {
-            if (!resizing) return;
-            resizing = false;
-            sidebar.classList.remove('no-transition');
-            document.body.style.userSelect = '';
-            localStorage.setItem('sidebarWidth', parseInt(sidebar.style.width, 10));
-        });
-
         // ---- Small utilities ----
         function toast(msg) {
             const t = document.getElementById('toast');
@@ -367,6 +329,105 @@
             d.textContent = s;
             return d.innerHTML;
         }
+
+        // ---- Sidebar: resize + collapse to icon rail ----
+        const sidebar = document.getElementById('sidebar');
+        const sidebarResizer = document.getElementById('sidebar-resizer');
+        const sidebarToggle = document.getElementById('sidebar-toggle');
+        const SIDEBAR_MIN = 180;
+        const SIDEBAR_MAX = 500;
+        const SIDEBAR_DEFAULT = 300;
+
+        function setToggleLabel() {
+            sidebarToggle.textContent = sidebar.classList.contains('collapsed') ? '»' : '«';
+            sidebarToggle.title = sidebar.classList.contains('collapsed') ? 'Expand sidebar' : 'Collapse sidebar';
+        }
+
+        function collapseSidebar() {
+            sidebar.classList.add('collapsed');
+            localStorage.setItem('sidebarCollapsed', '1');
+            setToggleLabel();
+        }
+
+        function expandSidebar() {
+            sidebar.classList.remove('collapsed');
+            localStorage.setItem('sidebarCollapsed', '0');
+            setToggleLabel();
+        }
+
+        // Restore saved width/collapsed state.
+        const savedWidth = parseInt(localStorage.getItem('sidebarWidth'), 10);
+        sidebar.style.width = (savedWidth >= SIDEBAR_MIN && savedWidth <= SIDEBAR_MAX ? savedWidth : SIDEBAR_DEFAULT) + 'px';
+        if (localStorage.getItem('sidebarCollapsed') === '1') sidebar.classList.add('collapsed');
+        setToggleLabel();
+
+        sidebarToggle.addEventListener('click', () => {
+            if (sidebar.classList.contains('collapsed')) expandSidebar(); else collapseSidebar();
+        });
+        document.getElementById('icon-home').addEventListener('click', () => { window.location.href = '/'; });
+        document.getElementById('icon-toc').addEventListener('click', () => {
+            expandSidebar();
+            document.querySelector('ul.toc-list').scrollIntoView({block: 'nearest'});
+        });
+
+        let resizing = false;
+        sidebarResizer.addEventListener('mousedown', (e) => {
+            if (sidebar.classList.contains('collapsed')) return;
+            resizing = true;
+            sidebar.classList.add('no-transition');
+            document.body.style.userSelect = 'none';
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', (e) => {
+            if (!resizing) return;
+            const width = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, e.clientX));
+            sidebar.style.width = width + 'px';
+        });
+        document.addEventListener('mouseup', () => {
+            if (!resizing) return;
+            resizing = false;
+            sidebar.classList.remove('no-transition');
+            document.body.style.userSelect = '';
+            localStorage.setItem('sidebarWidth', parseInt(sidebar.style.width, 10));
+        });
+
+        // ---- Notes (standalone, chapter-scoped; shown in the Library list) ----
+        const noteBtn = document.getElementById('note-btn');
+        const noteForm = document.getElementById('note-form');
+        const noteText = document.getElementById('note-text');
+
+        function openNoteForm() {
+            noteForm.classList.add('open');
+            noteText.focus();
+        }
+
+        noteBtn.addEventListener('click', openNoteForm);
+        document.getElementById('icon-note').addEventListener('click', () => {
+            expandSidebar();
+            openNoteForm();
+        });
+
+        document.getElementById('note-cancel').addEventListener('click', () => {
+            noteForm.classList.remove('open');
+            noteText.value = '';
+        });
+
+        document.getElementById('note-save').addEventListener('click', () => {
+            const text = noteText.value.trim();
+            if (!text) return;
+            fetch('/api/notes/' + BOOK_ID, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({chapter: CHAPTER_INDEX, text: text})
+            }).then(r => {
+                if (!r.ok) throw new Error();
+                return r.json();
+            }).then(() => {
+                noteForm.classList.remove('open');
+                noteText.value = '';
+                toast('Note saved');
+            }).catch(() => toast('Could not save note'));
+        });
 
         // ---- Highlighting: create on selection ----
         const content = document.querySelector('.book-content');
