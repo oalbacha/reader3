@@ -4,6 +4,7 @@ Parses an EPUB file into a structured object that can be used to serve the book 
 
 import os
 import pickle
+import re
 import shutil
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
@@ -69,6 +70,28 @@ class Book:
 
 # --- Utilities ---
 
+_INLINE_COLOR_RE = re.compile(r'^(color|background(-color)?)\s*:', re.IGNORECASE)
+
+
+def strip_inline_colors(soup: BeautifulSoup) -> BeautifulSoup:
+    """Remove color/background declarations from inline style="" attributes.
+
+    Some EPUBs bake hardcoded colors (e.g. `color: #000000;`) directly into
+    chapter HTML. Left alone, these override our theme CSS and can render
+    invisible text against a dark background. Other declarations in the same
+    style attribute (font-weight, font-size, etc.) are legitimate formatting
+    and are kept.
+    """
+    for tag in soup.find_all(style=True):
+        decls = [d.strip() for d in tag['style'].split(';') if d.strip()]
+        kept = [d for d in decls if not _INLINE_COLOR_RE.match(d)]
+        if kept:
+            tag['style'] = '; '.join(kept) + ';'
+        else:
+            del tag['style']
+    return soup
+
+
 def clean_html_content(soup: BeautifulSoup) -> BeautifulSoup:
 
     # Remove dangerous/useless tags
@@ -82,6 +105,8 @@ def clean_html_content(soup: BeautifulSoup) -> BeautifulSoup:
     # Remove input tags
     for tag in soup.find_all('input'):
         tag.decompose()
+
+    soup = strip_inline_colors(soup)
 
     return soup
 

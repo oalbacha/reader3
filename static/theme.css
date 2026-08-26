@@ -1,0 +1,129 @@
+/* Shared color tokens for light/dark theming, used by both templates/reader.html
+   and templates/library.html. Explicit choice: [data-theme="light"|"dark"] on <html>,
+   set via a small inline bootstrap script in each template's <head> (see there for
+   why it must be inline rather than loaded from here). No explicit choice (data-theme
+   absent) means "auto" -- follow prefers-color-scheme via the media query below. */
+
+:root {
+    --bg: #ffffff;
+    --surface: #f7f5f2;
+    --card-bg: #ffffff;
+    --text: #1a1a1a;
+    --text-muted: #6b6b6b;
+    --border: #e5e3e0;
+    --border-strong: #d8d5d0;
+
+    --accent: #3498db;
+    --accent-hover: #2980b9;
+    --accent-strong: #d63384;
+
+    --mark-bg: #fff2a8;
+    --mark-bg-hover: #ffe873;
+
+    --pill-new-bg: #eef1f4;
+    --pill-new-text: #6c757d;
+    --pill-progress-bg: #fff3cd;
+    --pill-progress-text: #8a6d00;
+    --pill-read-bg: #d1e7dd;
+    --pill-read-text: #0f5132;
+
+    /* "Inverse" chrome that should always pop against the page regardless of
+       theme: toast bubble, floating highlight button, primary save button. */
+    --button-dark-bg: #212529;
+    --button-dark-hover: #000000;
+    --button-dark-text: #ffffff;
+
+    --icon-btn-bg: #f4f4f9;
+    --icon-btn-hover-bg: #eef1f4;
+    --icon-btn-border: #dee2e6;
+
+    --progress-track-bg: #e9ecef;
+    --shadow: rgba(0, 0, 0, 0.1);
+
+    --hl-highlight-border: #ffe066;
+    --hl-note-border: #74c0fc;
+    --link-muted: #adb5bd;
+    --danger: #d63384;
+}
+
+[data-theme="dark"] {
+    --bg: #1a1a1a;
+    --surface: #262626;
+    --card-bg: #262626;
+    --text: #e8e8e6;
+    --text-muted: #9a9a9a;
+    --border: #333333;
+    --border-strong: #3d3d3d;
+
+    --accent: #5dade2;
+    --accent-hover: #7cc0ea;
+    --accent-strong: #e64980;
+
+    --mark-bg: #6b5b1f;
+    --mark-bg-hover: #8a7530;
+
+    --pill-new-bg: #3a3a3a;
+    --pill-new-text: #b8b8b8;
+    --pill-progress-bg: #4a3f1f;
+    --pill-progress-text: #e0c068;
+    --pill-read-bg: #1f3d2e;
+    --pill-read-text: #7dd8a8;
+
+    --button-dark-bg: #e8e8e6;
+    --button-dark-hover: #ffffff;
+    --button-dark-text: #1a1a1a;
+
+    --icon-btn-bg: #2b2b2b;
+    --icon-btn-hover-bg: #3a3a3a;
+    --icon-btn-border: #3d3d3d;
+
+    --progress-track-bg: #333333;
+    --shadow: rgba(0, 0, 0, 0.4);
+
+    --hl-highlight-border: #ffd43b;
+    --hl-note-border: #4dabf7;
+    --link-muted: #8a8a8a;
+    --danger: #ff6b9d;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+        --bg: #1a1a1a;
+        --surface: #262626;
+        --card-bg: #262626;
+        --text: #e8e8e6;
+        --text-muted: #9a9a9a;
+        --border: #333333;
+        --border-strong: #3d3d3d;
+
+        --accent: #5dade2;
+        --accent-hover: #7cc0ea;
+        --accent-strong: #e64980;
+
+        --mark-bg: #6b5b1f;
+        --mark-bg-hover: #8a7530;
+
+        --pill-new-bg: #3a3a3a;
+        --pill-new-text: #b8b8b8;
+        --pill-progress-bg: #4a3f1f;
+        --pill-progress-text: #e0c068;
+        --pill-read-bg: #1f3d2e;
+        --pill-read-text: #7dd8a8;
+
+        --button-dark-bg: #e8e8e6;
+        --button-dark-hover: #ffffff;
+        --button-dark-text: #1a1a1a;
+
+        --icon-btn-bg: #2b2b2b;
+        --icon-btn-hover-bg: #3a3a3a;
+        --icon-btn-border: #3d3d3d;
+
+        --progress-track-bg: #333333;
+        --shadow: rgba(0, 0, 0, 0.4);
+
+        --hl-highlight-border: #ffd43b;
+        --hl-note-border: #4dabf7;
+        --link-muted: #8a8a8a;
+        --danger: #ff6b9d;
+    }
+}

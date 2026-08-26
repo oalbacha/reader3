@@ -6,15 +6,17 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Optional
 
+from bs4 import BeautifulSoup
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from reader3 import Book, BookMetadata, ChapterContent, TOCEntry
+from reader3 import Book, BookMetadata, ChapterContent, TOCEntry, strip_inline_colors
 
 app = FastAPI()
+app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 # Where are the book folders located?
@@ -213,10 +215,18 @@ async def read_chapter(request: Request, book_id: str, chapter_index: int):
     highlights = state.get("highlights") or []
     chapter_highlights = [h for h in highlights if h.get("chapter") == chapter_index]
 
+    # Some already-processed EPUBs bake hardcoded colors into chapter HTML
+    # (e.g. inline style="color: #000000;"), which would override the theme
+    # CSS and go invisible in dark mode. Strip those per-request rather than
+    # mutating the cached chapter, since load_book_cached() reuses this object.
+    chapter_soup = BeautifulSoup(current_chapter.content, "html.parser")
+    chapter_html = str(strip_inline_colors(chapter_soup))
+
     return templates.TemplateResponse("reader.html", {
         "request": request,
         "book": book,
         "current_chapter": current_chapter,
+        "chapter_html": chapter_html,
         "chapter_index": chapter_index,
         "book_id": book_id,
         "prev_idx": prev_idx,

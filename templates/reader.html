@@ -2,104 +2,116 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <script>
+        (function () {
+            var m = localStorage.getItem('theme');
+            if (m === 'light' || m === 'dark') document.documentElement.setAttribute('data-theme', m);
+        })();
+    </script>
+    <link rel="stylesheet" href="/static/theme.css">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ book.metadata.title }}</title>
     <style>
         /* Layout */
-        body { margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; font-family: "Georgia", serif; background: #fff; }
+        body { margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; font-family: "Georgia", serif; background: var(--bg); color: var(--text); }
 
         /* Sidebar */
-        #sidebar { width: 300px; min-width: 180px; max-width: 500px; background: #f8f9fa; border-right: 1px solid #e9ecef; overflow-y: auto; padding: 20px; flex-shrink: 0; transition: width 0.15s ease; box-sizing: border-box; }
+        #sidebar { width: 300px; min-width: 180px; max-width: 500px; background: var(--surface); border-right: 1px solid var(--border); overflow-y: auto; padding: 20px; flex-shrink: 0; transition: width 0.15s ease; box-sizing: border-box; }
         #sidebar.no-transition { transition: none; }
-        .nav-header { font-family: -apple-system, sans-serif; font-weight: bold; color: #495057; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #dee2e6; }
-        .nav-home { display: block; margin-bottom: 20px; color: #3498db; text-decoration: none; font-family: -apple-system, sans-serif; font-size: 0.9em; }
-        .sidebar-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+        .nav-header { font-family: -apple-system, sans-serif; font-weight: bold; color: var(--text); margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid var(--border-strong); }
+        .nav-home { display: block; margin-bottom: 20px; color: var(--accent); text-decoration: none; font-family: -apple-system, sans-serif; font-size: 0.9em; }
+        .sidebar-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 20px; }
         .sidebar-top .nav-home { margin-bottom: 0; }
-        #sidebar-toggle { background: none; border: 1px solid #dee2e6; border-radius: 4px; color: #495057; cursor: pointer;
+        .sidebar-top-buttons { display: flex; gap: 6px; flex-shrink: 0; }
+        #sidebar-toggle, #theme-toggle { background: none; border: 1px solid var(--border-strong); border-radius: 4px; color: var(--text); cursor: pointer;
                           font-family: -apple-system, sans-serif; font-size: 0.9em; line-height: 1; padding: 4px 8px; flex-shrink: 0; }
-        #sidebar-toggle:hover { background: #eef1f4; color: #000; }
+        #sidebar-toggle:hover, #theme-toggle:hover { background: var(--icon-btn-hover-bg); }
 
         /* Resize handle */
         #sidebar-resizer { width: 6px; flex-shrink: 0; cursor: col-resize; background: transparent; }
-        #sidebar-resizer:hover, #sidebar-resizer.dragging { background: #d0d7de; }
+        #sidebar-resizer:hover, #sidebar-resizer.dragging { background: var(--border-strong); }
         #sidebar.collapsed + #sidebar-resizer { display: none; }
 
         /* Collapsed (icon-only) sidebar */
         #sidebar.collapsed { width: 56px !important; min-width: 56px; padding: 20px 8px; overflow-x: hidden; }
         #sidebar.collapsed > *:not(#sidebar-icons):not(.sidebar-top) { display: none; }
         #sidebar.collapsed .sidebar-top { flex-direction: column; gap: 8px; }
+        #sidebar.collapsed .sidebar-top-buttons { flex-direction: column; }
         #sidebar.collapsed .nav-home { display: none; }
         #sidebar-icons { display: none; flex-direction: column; gap: 10px; align-items: center; margin-top: 10px; }
         #sidebar.collapsed #sidebar-icons { display: flex; }
         .sidebar-icon-btn { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
-                             background: none; border: 1px solid transparent; border-radius: 6px; color: #495057;
+                             background: none; border: 1px solid transparent; border-radius: 6px; color: var(--text);
                              cursor: pointer; font-size: 1.1em; }
-        .sidebar-icon-btn:hover { background: #eef1f4; border-color: #dee2e6; color: #000; }
+        .sidebar-icon-btn:hover { background: var(--icon-btn-hover-bg); border-color: var(--icon-btn-border); }
 
         /* TOC Tree */
         ul.toc-list { list-style: none; padding-left: 0; margin: 0; }
         ul.toc-list ul { padding-left: 20px; } /* Indent children */
         li.toc-item { margin-bottom: 8px; }
-        a.toc-link { text-decoration: none; color: #495057; font-size: 0.95em; display: block; padding: 4px 0; line-height: 1.4; }
-        a.toc-link:hover { color: #000; text-decoration: underline; }
-        a.toc-link.active { color: #d63384; font-weight: bold; }
+        a.toc-link { text-decoration: none; color: var(--text); font-size: 0.95em; display: block; padding: 4px 0; line-height: 1.4; }
+        a.toc-link:hover { text-decoration: underline; }
+        a.toc-link.active { color: var(--accent-strong); font-weight: bold; }
 
         /* Main Content */
         #main { flex-grow: 1; overflow-y: auto; position: relative; scroll-behavior: smooth; }
-        .content-container { max-width: 700px; margin: 0 auto; padding: 60px 40px; line-height: 1.8; font-size: 1.15em; color: #212529; }
+        .content-container { max-width: 700px; margin: 0 auto; padding: 60px 40px; line-height: 1.8; font-size: 1.15em; color: var(--text); }
 
         /* Content Styling (Basic normalization for the book HTML) */
         .book-content img { max-width: 100%; height: auto; display: block; margin: 20px auto; }
         .book-content h1, .book-content h2, .book-content h3,
-        .book-content h4, .book-content h5, .book-content h6 { font-family: -apple-system, sans-serif; font-weight: 700; margin-top: 1.5em; color: #111; }
+        .book-content h4, .book-content h5, .book-content h6 { font-family: -apple-system, sans-serif; font-weight: 700; margin-top: 1.5em; color: var(--text); }
         .book-content h1 { font-weight: 800; }
         .book-content h2 { font-weight: 800; }
         .book-content p { margin-bottom: 1.5em; text-align: justify; }
+        .book-content a, .book-content a:visited { color: var(--accent); }
+        .book-content a:hover { color: var(--accent-hover); }
 
         /* Navigation Footer */
-        .chapter-nav { display: flex; justify-content: space-between; margin-top: 60px; padding-top: 20px; border-top: 1px solid #eee; font-family: -apple-system, sans-serif; }
-        .nav-btn { text-decoration: none; color: #3498db; font-weight: bold; padding: 10px 20px; border: 1px solid #3498db; border-radius: 4px; transition: all 0.2s; }
-        .nav-btn:hover { background: #3498db; color: white; }
-        .nav-btn.disabled { opacity: 0.5; pointer-events: none; border-color: #ccc; color: #ccc; }
+        .chapter-nav { display: flex; justify-content: space-between; margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--border); font-family: -apple-system, sans-serif; }
+        .nav-btn { text-decoration: none; color: var(--accent); font-weight: bold; padding: 10px 20px; border: 1px solid var(--accent); border-radius: 4px; transition: all 0.2s; }
+        .nav-btn:hover { background: var(--accent); color: white; }
+        .nav-btn.disabled { opacity: 0.5; pointer-events: none; border-color: var(--border-strong); color: var(--text-muted); }
+        .section-info { color: var(--text-muted); padding: 10px; }
 
         /* Sidebar actions */
         .sidebar-actions { font-family: -apple-system, sans-serif; margin: 15px 0 20px; display: flex; flex-direction: column; gap: 8px; }
-        .status-line { font-size: 0.85em; color: #666; display: flex; align-items: center; gap: 6px; }
+        .status-line { font-size: 0.85em; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
         .status-pill { font-size: 0.72em; font-weight: bold; text-transform: uppercase; letter-spacing: 0.03em; padding: 2px 8px; border-radius: 999px; }
-        .status-pill.new { background: #eef1f4; color: #6c757d; }
-        .status-pill.in_progress { background: #fff3cd; color: #8a6d00; }
-        .status-pill.read { background: #d1e7dd; color: #0f5132; }
+        .status-pill.new { background: var(--pill-new-bg); color: var(--pill-new-text); }
+        .status-pill.in_progress { background: var(--pill-progress-bg); color: var(--pill-progress-text); }
+        .status-pill.read { background: var(--pill-read-bg); color: var(--pill-read-text); }
 
         /* Add-note */
-        .note-btn { align-self: flex-start; background: #f4f4f9; border: 1px solid #dee2e6; border-radius: 4px;
-                    color: #495057; font-family: -apple-system, sans-serif; font-size: 0.82em; padding: 5px 10px; cursor: pointer; }
-        .note-btn:hover { background: #eef1f4; color: #000; border-color: #ced4da; }
+        .note-btn { align-self: flex-start; background: var(--icon-btn-bg); border: 1px solid var(--border-strong); border-radius: 4px;
+                    color: var(--text); font-family: -apple-system, sans-serif; font-size: 0.82em; padding: 5px 10px; cursor: pointer; }
+        .note-btn:hover { background: var(--icon-btn-hover-bg); border-color: var(--icon-btn-border); }
         .note-form { display: none; flex-direction: column; gap: 6px; }
         .note-form.open { display: flex; }
         .note-form textarea { width: 100%; box-sizing: border-box; min-height: 70px; resize: vertical; font-family: -apple-system, sans-serif;
-                               font-size: 0.85em; padding: 8px; border: 1px solid #dee2e6; border-radius: 4px; }
+                               font-size: 0.85em; padding: 8px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--bg); color: var(--text); }
         .note-form-actions { display: flex; justify-content: flex-end; gap: 6px; }
         .note-form-actions button { font-family: -apple-system, sans-serif; font-size: 0.8em; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
-        #note-cancel { background: #fff; border: 1px solid #dee2e6; color: #495057; }
-        #note-save { background: #212529; border: 1px solid #212529; color: #fff; }
-        #note-save:hover { background: #000; }
+        #note-cancel { background: var(--bg); border: 1px solid var(--border-strong); color: var(--text); }
+        #note-save { background: var(--button-dark-bg); border: 1px solid var(--button-dark-bg); color: var(--button-dark-text); }
+        #note-save:hover { background: var(--button-dark-hover); }
 
         /* Top progress bar */
-        #top-progress { position: fixed; top: 0; left: 0; right: 0; height: 4px; background: #e9ecef; z-index: 50; }
-        #top-progress > div { height: 100%; width: 0; background: #d63384; transition: width 0.25s; }
+        #top-progress { position: fixed; top: 0; left: 0; right: 0; height: 4px; background: var(--progress-track-bg); z-index: 50; }
+        #top-progress > div { height: 100%; width: 0; background: var(--accent-strong); transition: width 0.25s; }
 
         /* Highlights */
-        .book-content mark.hl { background: #fff2a8; padding: 0 1px; border-radius: 2px; cursor: pointer; box-decoration-break: clone; }
-        .book-content mark.hl:hover { background: #ffe873; }
+        .book-content mark.hl { background: var(--mark-bg); color: inherit; padding: 0 1px; border-radius: 2px; cursor: pointer; box-decoration-break: clone; }
+        .book-content mark.hl:hover { background: var(--mark-bg-hover); }
 
         /* Floating highlight button */
-        #hl-btn { position: absolute; z-index: 100; display: none; background: #212529; color: #fff; border: none;
+        #hl-btn { position: absolute; z-index: 100; display: none; background: var(--button-dark-bg); color: var(--button-dark-text); border: none;
                   border-radius: 6px; padding: 6px 12px; font-family: -apple-system, sans-serif; font-size: 0.85em;
-                  cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.25); }
-        #hl-btn:hover { background: #000; }
+                  cursor: pointer; box-shadow: 0 2px 8px var(--shadow); }
+        #hl-btn:hover { background: var(--button-dark-hover); }
 
         /* Toast */
-        #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #212529; color: #fff;
+        #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--button-dark-bg); color: var(--button-dark-text);
                  padding: 10px 18px; border-radius: 6px; font-family: -apple-system, sans-serif; font-size: 0.9em;
                  opacity: 0; pointer-events: none; transition: opacity 0.2s; z-index: 200; }
         #toast.show { opacity: 1; }
@@ -113,7 +125,10 @@
     <div id="sidebar">
         <div class="sidebar-top">
             <a href="/" class="nav-home">← Back to Library</a>
-            <button type="button" id="sidebar-toggle" title="Collapse sidebar">«</button>
+            <div class="sidebar-top-buttons">
+                <button type="button" id="theme-toggle" title="Theme">🖥</button>
+                <button type="button" id="sidebar-toggle" title="Collapse sidebar">«</button>
+            </div>
         </div>
         <div id="sidebar-icons">
             <button type="button" class="sidebar-icon-btn" id="icon-home" title="Back to Library">←</button>
@@ -193,7 +208,7 @@
     <div id="main">
         <div class="content-container">
             <div class="book-content">
-                {{ current_chapter.content | safe }}
+                {{ chapter_html | safe }}
             </div>
 
             <div class="chapter-nav">
@@ -203,7 +218,7 @@
                     <span class="nav-btn disabled">← Previous</span>
                 {% endif %}
 
-                <span style="color: #999; padding: 10px;">
+                <span class="section-info">
                     Section {{ chapter_index + 1 }} of {{ book.spine|length }}
                     · <span id="footer-progress">{{ progress_pct }}%</span> read
                 </span>
@@ -329,6 +344,32 @@
             d.textContent = s;
             return d.innerHTML;
         }
+
+        // ---- Theme: light / dark / auto cycle, persisted in localStorage ----
+        const THEME_ICONS = {light: '☀', dark: '🌙', auto: '🖥'};
+        const THEME_LABELS = {light: 'Light', dark: 'Dark', auto: 'Auto (matches system)'};
+        const THEME_NEXT = {light: 'dark', dark: 'auto', auto: 'light'};
+        const themeToggle = document.getElementById('theme-toggle');
+
+        function currentTheme() {
+            const m = localStorage.getItem('theme');
+            return (m === 'light' || m === 'dark') ? m : 'auto';
+        }
+
+        function applyTheme(mode) {
+            if (mode === 'auto') {
+                document.documentElement.removeAttribute('data-theme');
+                localStorage.removeItem('theme');
+            } else {
+                document.documentElement.setAttribute('data-theme', mode);
+                localStorage.setItem('theme', mode);
+            }
+            themeToggle.textContent = THEME_ICONS[mode];
+            themeToggle.title = 'Theme: ' + THEME_LABELS[mode] + ' — click to switch to ' + THEME_LABELS[THEME_NEXT[mode]];
+        }
+
+        applyTheme(currentTheme());
+        themeToggle.addEventListener('click', () => applyTheme(THEME_NEXT[currentTheme()]));
 
         // ---- Sidebar: resize + collapse to icon rail ----
         const sidebar = document.getElementById('sidebar');
