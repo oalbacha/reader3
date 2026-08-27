@@ -362,7 +362,15 @@ def process_epub(epub_path: str, output_dir: str) -> Book:
         if not item:
             continue
 
-        if item.get_type() == ebooklib.ITEM_DOCUMENT:
+        # Some EPUBs (commonly ones re-saved by third-party tools) declare
+        # chapter files with media-type "text/html" instead of the spec's
+        # "application/xhtml+xml". ebooklib only tags the latter as
+        # ITEM_DOCUMENT, so those chapters would otherwise be silently
+        # dropped even though the spine explicitly lists them as content.
+        is_html_doc = item.get_type() == ebooklib.ITEM_DOCUMENT or \
+            item.get_name().lower().endswith(('.html', '.xhtml', '.htm'))
+
+        if is_html_doc:
             # Raw content
             raw_content = item.get_content().decode('utf-8', errors='ignore')
             soup = BeautifulSoup(raw_content, 'html.parser')
