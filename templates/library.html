@@ -143,7 +143,7 @@
 
     <script>
         // ---- Theme: light / dark / auto cycle, persisted in localStorage ----
-        const THEME_ICONS = {light: '☀', dark: '🌙', auto: '🖥'};
+        const THEME_ICONS = {light: '☀', dark: '☾', auto: '🖥'};
         const THEME_LABELS = {light: 'Light', dark: 'Dark', auto: 'Auto (matches system)'};
         const THEME_NEXT = {light: 'dark', dark: 'auto', auto: 'light'};
         const themeToggle = document.getElementById('theme-toggle');
@@ -251,12 +251,32 @@
             }).join('') || '<div class="hl-empty">No highlights yet.</div>';
         }
 
+        // Re-fetch this book's highlights from the server and use that as the
+        // new truth for the modal + card, rather than trusting a mutation's
+        // response. A mutation can partially fail server-side (e.g. the
+        // delete itself succeeds but a later step throws) and still return
+        // an error, which would otherwise leave the UI showing stale data
+        // until a manual page reload.
+        function refreshModalHighlights(card) {
+            return fetch('/api/state/' + card.dataset.bookId)
+                .then(r => r.json())
+                .then(s => {
+                    const highlights = (s.highlights || []).slice()
+                        .sort((a, b) => (a.chapter || 0) - (b.chapter || 0));
+                    modalHighlights = highlights;
+                    card.dataset.highlights = JSON.stringify(highlights);
+                    renderModalBody();
+                    return highlights;
+                });
+        }
+
         function openHlModal(card) {
             modalCard = card;
             modalHighlights = JSON.parse(card.dataset.highlights || '[]');
             hlModalTitle.textContent = card.dataset.title || '';
             renderModalBody();
             hlBackdrop.classList.add('open');
+            refreshModalHighlights(card).catch(() => {});
         }
 
         function closeHlModal() {
@@ -279,12 +299,10 @@
             const card = modalCard;
             const bookId = card.dataset.bookId;
             fetch('/api/highlights/' + bookId + '/' + id, {method: 'DELETE'})
-                .then(r => {
-                    if (!r.ok) throw new Error();
-                    modalHighlights = modalHighlights.filter(h => h.id !== id);
-                    renderModalBody();
-                    card.dataset.highlights = JSON.stringify(modalHighlights);
-                    toast('Deleted');
+                .catch(() => {}) // transport error -- the resync below is the real check
+                .then(() => refreshModalHighlights(card))
+                .then(highlights => {
+                    toast(highlights.some(h => h.id === id) ? 'Could not delete' : 'Deleted');
                 }).catch(() => toast('Could not delete'));
         });
 

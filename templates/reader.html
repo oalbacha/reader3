@@ -346,7 +346,7 @@
         }
 
         // ---- Theme: light / dark / auto cycle, persisted in localStorage ----
-        const THEME_ICONS = {light: '☀', dark: '🌙', auto: '🖥'};
+        const THEME_ICONS = {light: '☀', dark: '☾', auto: '🖥'};
         const THEME_LABELS = {light: 'Light', dark: 'Dark', auto: 'Auto (matches system)'};
         const THEME_NEXT = {light: 'dark', dark: 'auto', auto: 'light'};
         const themeToggle = document.getElementById('theme-toggle');
@@ -495,9 +495,31 @@
             if (e.target !== hlBtn) hlBtn.style.display = 'none';
         });
 
+        // Extract the raw, un-rendered text of a range by concatenating the
+        // literal nodeValue of every text node it touches. Selection.toString()
+        // instead approximates *rendered* text (collapsing whitespace, inserting
+        // newlines at block boundaries), which drifts from the source HTML and
+        // makes findRange() below unable to relocate the highlight on reload.
+        // Saving this raw form keeps the two searches over identical text.
+        function rawTextOfRange(range) {
+            if (range.collapsed) return '';
+            const root = range.commonAncestorContainer;
+            const scope = root.nodeType === Node.TEXT_NODE ? root.parentNode : root;
+            const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, null);
+            let text = '';
+            let node;
+            while ((node = walker.nextNode())) {
+                if (!range.intersectsNode(node)) continue;
+                const start = node === range.startContainer ? range.startOffset : 0;
+                const end = node === range.endContainer ? range.endOffset : node.nodeValue.length;
+                if (end > start) text += node.nodeValue.slice(start, end);
+            }
+            return text;
+        }
+
         hlBtn.addEventListener('click', () => {
             if (!pendingRange) return;
-            const text = pendingRange.toString().trim();
+            const text = rawTextOfRange(pendingRange).trim();
             hlBtn.style.display = 'none';
             fetch('/api/highlights/' + BOOK_ID, {
                 method: 'POST',

@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
+from obsidian_sync import sync_book_notes
 from reader3 import Book, BookMetadata, ChapterContent, TOCEntry, strip_inline_colors
 
 app = FastAPI()
@@ -176,6 +177,9 @@ async def library_view(request: Request):
                 if book:
                     state = load_state(item)
                     highlights = state.get("highlights") or []
+                    # Sort by book/spine order (not creation order) so the list
+                    # reads front-to-back like the book, matching /api/export.
+                    highlights_list = sorted(highlights, key=lambda h: h.get("chapter", 0))
                     cover_image = getattr(book, "cover_image", None)
                     books.append({
                         "id": item,
@@ -185,7 +189,7 @@ async def library_view(request: Request):
                         "status": derive_status(state),
                         "progress": round((state.get("progress") or 0.0) * 100),
                         "highlights": len(highlights),
-                        "highlights_list": highlights,
+                        "highlights_list": highlights_list,
                         "last_chapter": state.get("last_chapter", 0),
                         "cover_url": f"/read/{item}/{cover_image}" if cover_image else None,
                     })
@@ -338,6 +342,7 @@ async def add_highlight(book_id: str, body: HighlightBody):
     state = load_state(book_id)
     state["highlights"].append(highlight)
     save_state(book_id, state)
+    _sync_obsidian(book, state)
     return highlight
 
 
@@ -364,18 +369,21 @@ async def add_note(book_id: str, body: NoteBody):
     state = load_state(book_id)
     state["highlights"].append(note)
     save_state(book_id, state)
+    _sync_obsidian(book, state)
     return note
 
 
 @app.delete("/api/highlights/{book_id}/{highlight_id}")
 async def delete_highlight(book_id: str, highlight_id: str):
-    _require_book(book_id)
+    book = _require_book(book_id)
     state = load_state(book_id)
     before = len(state["highlights"])
     state["highlights"] = [h for h in state["highlights"] if h.get("id") != highlight_id]
     if len(state["highlights"]) == before:
         raise HTTPException(status_code=404, detail="Highlight not found")
     save_state(book_id, state)
+    # Removing the last highlight removes the book's note from the vault.
+    _sync_obsidian(book, state)
     return {"ok": True}
 
 
@@ -441,7 +449,42 @@ async def remove_book(book_id: str):
     return {"ok": True}
 
 
+# --- Obsidian sync ---
+
+def _sync_obsidian(book: Book, state: dict) -> None:
+    """Best-effort sync of this book's highlights/notes to the Obsidian
+    vault. Never let a vault problem break reading — log and move on."""
+    try:
+        sync_book_notes(book, state.get("highlights") or [])
+    except Exception as e:
+        print(f"[obsidian] Sync failed for {getattr(book.metadata, 'title', '?')}: {e}")
+
+
+def sync_all_obsidian_notes() -> int:
+    """Backfill: sync every book in the library to the vault. Books with no
+    highlights produce no vault document (stale ones are removed). Returns
+    the number of notes written."""
+    written = 0
+    for item in os.listdir(BOOKS_DIR):
+        if not (item.endswith("_data") and os.path.isdir(item)):
+            continue
+        book = load_book_cached(item)
+        if not book:
+            continue
+        state = load_state(item)
+        path = sync_book_notes(book, state.get("highlights") or [])
+        if path:
+            written += 1
+    return written
+
+
 if __name__ == "__main__":
     import uvicorn
+    # Backfill on startup so existing highlights/notes land in the vault.
+    try:
+        w = sync_all_obsidian_notes()
+        print(f"[obsidian] Backfill complete: {w} book note(s) synced")
+    except Exception as e:
+        print(f"[obsidian] Backfill failed: {e}")
     print("Starting server at http://127.0.0.1:8123")
     uvicorn.run(app, host="127.0.0.1", port=8123)
