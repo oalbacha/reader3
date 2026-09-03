@@ -156,6 +156,11 @@ class HighlightBody(BaseModel):
     chapter: int
     text: str
     note: str = ""
+    # Character offset of `text` within the chapter's flattened raw text at
+    # the moment of highlighting. A position hint only (chapter content is
+    # static, so it should stay valid) -- used to disambiguate which
+    # occurrence to re-mark when `text` appears more than once.
+    offset: Optional[int] = None
 
 
 class NoteBody(BaseModel):
@@ -335,6 +340,7 @@ async def add_highlight(book_id: str, body: HighlightBody):
         "chapter": body.chapter,
         "chapter_title": chapter_title(book, body.chapter),
         "text": text,
+        "offset": body.offset,
         "note": body.note or "",
         "kind": "highlight",
         "ts": datetime.now(timezone.utc).isoformat(),

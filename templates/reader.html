@@ -104,6 +104,17 @@
         .book-content mark.hl { background: var(--mark-bg); color: inherit; padding: 0 1px; border-radius: 2px; cursor: pointer; box-decoration-break: clone; }
         .book-content mark.hl:hover { background: var(--mark-bg-hover); }
 
+        /* Unplaced-highlight banner */
+        #unplaced-banner { display: none; font-family: -apple-system, sans-serif; font-size: 0.85em; margin-bottom: 30px;
+                            padding: 10px 14px; border: 1px solid var(--border-strong); border-left: 3px solid var(--pill-progress-text, #b8860b);
+                            border-radius: 4px; background: var(--surface); }
+        #unplaced-banner-title { font-weight: bold; margin-bottom: 8px; }
+        .unplaced-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+                          padding: 6px 0; border-top: 1px solid var(--border); color: var(--text-muted); line-height: 1.4; }
+        .unplaced-item:first-child { border-top: none; }
+        .unplaced-del { flex-shrink: 0; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1em; padding: 0 2px; }
+        .unplaced-del:hover { color: var(--text); }
+
         /* Floating highlight button */
         #hl-btn { position: absolute; z-index: 100; display: none; background: var(--button-dark-bg); color: var(--button-dark-text); border: none;
                   border-radius: 6px; padding: 6px 12px; font-family: -apple-system, sans-serif; font-size: 0.85em;
@@ -207,6 +218,10 @@
     <!-- MAIN CONTENT -->
     <div id="main">
         <div class="content-container">
+            <div id="unplaced-banner">
+                <div id="unplaced-banner-title">⚠ <span id="unplaced-count"></span> highlight(s) in this chapter couldn't be located in the text</div>
+                <div id="unplaced-list"></div>
+            </div>
             <div class="book-content">
                 {{ chapter_html | safe }}
             </div>
@@ -517,16 +532,41 @@
             return text;
         }
 
+        // Character offset of a range's start within the chapter's flattened
+        // raw text (same node-walk order/space findRange() searches). Saved
+        // as a position hint so a repeated quote can be re-anchored to the
+        // occurrence nearest where it was originally highlighted, instead of
+        // always the first occurrence in the chapter.
+        function rawOffsetOf(range) {
+            const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, null);
+            let offset = 0;
+            let node;
+            while ((node = walker.nextNode())) {
+                if (node === range.startContainer) return offset + range.startOffset;
+                offset += node.nodeValue.length;
+            }
+            return null;
+        }
+
         hlBtn.addEventListener('click', () => {
             if (!pendingRange) return;
-            const text = rawTextOfRange(pendingRange).trim();
+            const raw = rawTextOfRange(pendingRange);
+            const text = raw.trim();
+            const leadingTrimmed = raw.length - raw.trimStart().length;
+            const rawOffset = rawOffsetOf(pendingRange);
+            const offset = rawOffset === null ? null : rawOffset + leadingTrimmed;
             hlBtn.style.display = 'none';
             fetch('/api/highlights/' + BOOK_ID, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({chapter: CHAPTER_INDEX, text: text})
+                body: JSON.stringify({chapter: CHAPTER_INDEX, text: text, offset: offset})
             }).then(r => r.json()).then(h => {
-                try { wrapRange(pendingRange, h.id); } catch (e) { /* fall back to reload look */ }
+                try {
+                    wrapRange(pendingRange, h.id);
+                } catch (e) {
+                    unplacedHighlights.push(h);
+                    renderUnplacedBanner();
+                }
                 window.getSelection().removeAllRanges();
                 pendingRange = null;
                 ALL_HIGHLIGHTS.push(h);
@@ -590,21 +630,35 @@
         });
 
         // ---- Re-apply saved highlights for this chapter on load ----
-        // Locate the first occurrence of each stored passage, even when it
-        // spans multiple text nodes (e.g. across a paragraph and a list), by
-        // searching over the concatenated text of the content area.
-        function findRange(text) {
+        // Locate every occurrence of the stored passage, even when it spans
+        // multiple text nodes (e.g. across a paragraph and a list), by
+        // searching over the concatenated text of the content area, then
+        // pick the occurrence closest to the saved `hint` offset -- this is
+        // what disambiguates two different highlights of the same repeated
+        // quote. wrapRange() below independently skips nodes already inside
+        // a <mark>, so overlapping an existing highlight is safe even though
+        // this search no longer excludes already-marked text.
+        function findRange(text, hint) {
             const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, null);
             const nodes = [];
             let full = '';
             let node;
             while ((node = walker.nextNode())) {
-                if (node.parentNode.closest('mark.hl')) continue; // skip already-marked
                 nodes.push({node, offset: full.length});
                 full += node.nodeValue;
             }
-            const idx = full.indexOf(text);
-            if (idx === -1) return null;
+            const occurrences = [];
+            let searchFrom = 0;
+            while (true) {
+                const found = full.indexOf(text, searchFrom);
+                if (found === -1) break;
+                occurrences.push(found);
+                searchFrom = found + 1;
+            }
+            if (occurrences.length === 0) return null;
+            const idx = (typeof hint === 'number')
+                ? occurrences.reduce((best, cur) => Math.abs(cur - hint) < Math.abs(best - hint) ? cur : best)
+                : occurrences[0];
             const end = idx + text.length;
             let startNode, startOffset, endNode, endOffset;
             for (const {node, offset} of nodes) {
@@ -621,12 +675,62 @@
             return range;
         }
 
+        // ---- Surface highlights that couldn't be relocated in the text ----
+        // Silently dropping a highlight that no longer matches is how the
+        // last few of these bugs went unnoticed for so long -- always show
+        // the reader when one didn't get placed, instead of only when they
+        // happen to notice it missing.
+        const unplacedBanner = document.getElementById('unplaced-banner');
+        const unplacedCount = document.getElementById('unplaced-count');
+        const unplacedList = document.getElementById('unplaced-list');
+        let unplacedHighlights = [];
+
+        function renderUnplacedBanner() {
+            if (unplacedHighlights.length === 0) {
+                unplacedBanner.style.display = 'none';
+                return;
+            }
+            unplacedBanner.style.display = 'block';
+            unplacedCount.textContent = unplacedHighlights.length;
+            unplacedList.innerHTML = unplacedHighlights.map(h => {
+                const snippet = h.text.length > 140 ? h.text.slice(0, 140) + '…' : h.text;
+                return '<div class="unplaced-item" data-id="' + h.id + '">' +
+                    '<span>' + snippet.replace(/</g, '&lt;') + '</span>' +
+                    '<button type="button" class="unplaced-del" data-role="unplaced-del" title="Delete">✕</button>' +
+                    '</div>';
+            }).join('');
+        }
+
+        unplacedList.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-role="unplaced-del"]');
+            if (!btn) return;
+            const id = btn.closest('.unplaced-item').dataset.id;
+            if (!confirm('Delete this highlight?')) return;
+            fetch('/api/highlights/' + BOOK_ID + '/' + id, {method: 'DELETE'})
+                .then(r => {
+                    if (!r.ok) throw new Error();
+                    ALL_HIGHLIGHTS = ALL_HIGHLIGHTS.filter(h => h.id !== id);
+                    CHAPTER_HIGHLIGHTS = CHAPTER_HIGHLIGHTS.filter(h => h.id !== id);
+                    unplacedHighlights = unplacedHighlights.filter(h => h.id !== id);
+                    renderUnplacedBanner();
+                    toast('Deleted');
+                }).catch(() => toast('Could not delete'));
+        });
+
         function reapplyHighlights() {
+            unplacedHighlights = [];
             CHAPTER_HIGHLIGHTS.forEach(h => {
-                if (!h.text) return;
-                const range = findRange(h.text);
-                if (range) { try { wrapRange(range, h.id); } catch (e) {} }
+                // Standalone notes aren't quotes from the book -- they're
+                // never expected to be found/marked in the text.
+                if (!h.text || h.kind === 'note') return;
+                const range = findRange(h.text, h.offset);
+                let placed = false;
+                if (range) {
+                    try { wrapRange(range, h.id); placed = true; } catch (e) { placed = false; }
+                }
+                if (!placed) unplacedHighlights.push(h);
             });
+            renderUnplacedBanner();
         }
         reapplyHighlights();
     </script>
