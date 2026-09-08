@@ -10,12 +10,15 @@
     </script>
     <link rel="stylesheet" href="/static/theme.css?v=5">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Library</title>
+    <title>{{ 'Archive' if archive_mode else 'My Library' }}</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--surface); color: var(--text); margin: 0; padding: 40px; }
         .container { max-width: 800px; margin: 0 auto; }
         .page-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 2px solid var(--border-strong); padding-bottom: 10px; }
+        .page-header-left { display: flex; align-items: baseline; gap: 14px; min-width: 0; }
         h1 { color: var(--text); margin: 0; }
+        .archive-link { font-size: 0.85em; color: var(--link-muted); text-decoration: none; white-space: nowrap; }
+        .archive-link:hover { color: var(--text); text-decoration: underline; }
         /* Apple Books style: bare cover art on the page background, no card
            box/border/shadow -- just the image and a thin text row under it. */
         .book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 28px 18px; margin-top: 30px; }
@@ -91,12 +94,26 @@
 <body>
     <div class="container">
         <div class="page-header">
-            <h1>Library</h1>
+            <div class="page-header-left">
+                {% if archive_mode %}
+                    <h1>Archive</h1>
+                    <a class="archive-link" href="/">← Library</a>
+                {% else %}
+                    <h1>Library</h1>
+                    {% if archived_count > 0 %}
+                        <a class="archive-link" href="/archive">Archive ({{ archived_count }})</a>
+                    {% endif %}
+                {% endif %}
+            </div>
             <button type="button" class="icon-btn" id="theme-toggle" title="Theme">🖥</button>
         </div>
 
         {% if not books %}
-            <p>No processed books found. Run <code>reader3.py</code> on an epub first.</p>
+            {% if archive_mode %}
+                <p>No archived books.</p>
+            {% else %}
+                <p>No processed books found. Run <code>reader3.py</code> on an epub first.</p>
+            {% endif %}
         {% endif %}
 
         <div class="book-grid">
@@ -126,6 +143,11 @@
         <button type="button" class="card-menu-item" data-role="mark-read">Mark as Read</button>
         <button type="button" class="card-menu-item" data-role="toggle-highlights">View Highlights</button>
         <button type="button" class="card-menu-item" data-role="export-md">Export Highlights</button>
+        {% if archive_mode %}
+            <button type="button" class="card-menu-item" data-role="archive-toggle">Move to Library</button>
+        {% else %}
+            <button type="button" class="card-menu-item" data-role="archive-toggle">Archive Book</button>
+        {% endif %}
         <button type="button" class="card-menu-item danger" data-role="remove-book">Remove Book</button>
     </div>
 
@@ -142,6 +164,11 @@
     <div id="toast"></div>
 
     <script>
+        // Whether this page is the Archive section (vs. the main library).
+        // Drives which direction the "Archive Book" / "Move to Library"
+        // menu action toggles the `archived` flag.
+        const ARCHIVE_MODE = {{ 'true' if archive_mode else 'false' }};
+
         // ---- Theme: light / dark / auto cycle, persisted in localStorage ----
         const THEME_ICONS = {light: '☀', dark: '☾', auto: '🖥'};
         const THEME_LABELS = {light: 'Light', dark: 'Dark', auto: 'Auto (matches system)'};
@@ -352,6 +379,25 @@
             const card = menuCard;
             closeCardMenu();
             if (card) window.location.href = '/api/export/' + card.dataset.bookId;
+        });
+
+        // ---- Archive / Move to Library ----
+        // Reversible: only flips `archived` in state.json. Never touches the
+        // book's folder, progress, highlights, or status (unlike Remove).
+        cardMenu.querySelector('[data-role="archive-toggle"]').addEventListener('click', () => {
+            const card = menuCard;
+            closeCardMenu();
+            if (!card) return;
+            const nextArchived = !ARCHIVE_MODE;
+            fetch('/api/archive/' + card.dataset.bookId, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({archived: nextArchived})
+            }).then(r => {
+                if (!r.ok) throw new Error();
+                card.remove();
+                toast(nextArchived ? 'Book archived' : 'Moved to library');
+            }).catch(() => toast(nextArchived ? 'Could not archive book' : 'Could not move book'));
         });
 
         // ---- Remove book (soft delete -- moved to .trash/, recoverable) ----
