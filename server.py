@@ -78,6 +78,7 @@ def default_state() -> dict:
         # has been fully read.
         "chapter_progress": {},
         "highlights": [],
+        "archived": False,
     }
 
 
@@ -144,6 +145,7 @@ def load_state(book_id: str) -> dict:
             print(f"Error loading state {book_id}: {e}")
     # Normalize types
     state["highlights"] = state.get("highlights") or []
+    state["archived"] = bool(state.get("archived", False))
 
     had_chapter_progress = isinstance(stored, dict) and isinstance(stored.get("chapter_progress"), dict)
     if had_chapter_progress:
@@ -249,6 +251,10 @@ class StatusBody(BaseModel):
     status: Optional[str] = None
 
 
+class ArchiveBody(BaseModel):
+    archived: bool
+
+
 class HighlightBody(BaseModel):
     chapter: int
     text: str
@@ -265,12 +271,13 @@ class NoteBody(BaseModel):
     text: str
 
 
-@app.get("/", response_class=HTMLResponse)
-async def library_view(request: Request):
-    """Lists all available processed books."""
+def _scan_books(archived: bool) -> list:
+    """Scan BOOKS_DIR for processed book folders and build the card list,
+    keeping only books whose `archived` flag matches. Shared by the library
+    and archive views so they render identical card data from one source of
+    truth."""
     books = []
 
-    # Scan directory for folders ending in '_data' that have a book.pkl
     if os.path.exists(BOOKS_DIR):
         for item in os.listdir(BOOKS_DIR):
             if item.endswith("_data") and os.path.isdir(item):
@@ -278,6 +285,8 @@ async def library_view(request: Request):
                 book = load_book_cached(item)
                 if book:
                     state = load_state(item)
+                    if bool(state.get("archived", False)) != archived:
+                        continue
                     highlights = state.get("highlights") or []
                     # Sort by book/spine order (not creation order) so the list
                     # reads front-to-back like the book, matching /api/export.
@@ -303,8 +312,33 @@ async def library_view(request: Request):
     # Show in-progress books first, then new, then finished.
     order = {"in_progress": 0, "new": 1, "read": 2}
     books.sort(key=lambda b: (order.get(b["status"], 1), b["title"].lower()))
+    return books
 
-    return templates.TemplateResponse("library.html", {"request": request, "books": books})
+
+@app.get("/", response_class=HTMLResponse)
+async def library_view(request: Request):
+    """Lists all non-archived processed books."""
+    books = _scan_books(archived=False)
+    archived_count = len(_scan_books(archived=True))
+    return templates.TemplateResponse("library.html", {
+        "request": request,
+        "books": books,
+        "archive_mode": False,
+        "archived_count": archived_count,
+    })
+
+
+@app.get("/archive", response_class=HTMLResponse)
+async def archive_view(request: Request):
+    """Lists archived books, reusing the library card template/styles.
+    Reachable only via the "Archive" link on the home page."""
+    books = _scan_books(archived=True)
+    return templates.TemplateResponse("library.html", {
+        "request": request,
+        "books": books,
+        "archive_mode": True,
+        "archived_count": len(books),
+    })
 
 @app.get("/read/{book_id}", response_class=HTMLResponse)
 async def redirect_to_first_chapter(book_id: str):
@@ -447,6 +481,18 @@ async def set_status(book_id: str, body: StatusBody):
         state["chapter_progress"] = {}
     save_state(book_id, state)
     return {"progress": state.get("progress", 0.0), "status": derive_status(state)}
+
+
+@app.post("/api/archive/{book_id}")
+async def set_archived(book_id: str, body: ArchiveBody):
+    """Toggle the `archived` flag. Purely a visibility flag: unlike
+    /api/remove, this never touches the book's folder, progress, highlights,
+    or status."""
+    _require_book(book_id)
+    state = load_state(book_id)
+    state["archived"] = body.archived
+    save_state(book_id, state)
+    return {"archived": state["archived"]}
 
 
 @app.post("/api/highlights/{book_id}")
