@@ -255,8 +255,11 @@
         // ---- Config passed from server ----
         const BOOK_ID = "{{ book_id }}";
         const CHAPTER_INDEX = {{ chapter_index }};
-        const LAST_CHAPTER = {{ last_chapter }};
-        const LAST_SCROLL = {{ last_scroll }};
+        // Earliest unfinished chapter (per-chapter progress map) -- this is
+        // what scroll-restore-on-load targets, not merely the last chapter
+        // that happened to be opened.
+        const RESUME_CHAPTER = {{ resume_chapter }};
+        const RESUME_SCROLL = {{ resume_scroll }};
         let CHAPTER_HIGHLIGHTS = {{ chapter_highlights | tojson }};
         let ALL_HIGHLIGHTS = {{ highlights | tojson }};
 
@@ -340,9 +343,9 @@
         // Wait for full load (images affect scrollHeight) so the fraction maps
         // to the right pixel offset.
         function restoreScroll() {
-            if (CHAPTER_INDEX === LAST_CHAPTER && LAST_SCROLL > 0) {
+            if (CHAPTER_INDEX === RESUME_CHAPTER && RESUME_SCROLL > 0) {
                 const scrollable = main.scrollHeight - main.clientHeight;
-                if (scrollable > 0) main.scrollTop = LAST_SCROLL * scrollable;
+                if (scrollable > 0) main.scrollTop = RESUME_SCROLL * scrollable;
             }
             // Record current position (also covers short chapters that never scroll).
             postProgress(false);

@@ -66,13 +66,74 @@ def state_path(book_id: str) -> str:
 
 
 def default_state() -> dict:
-    return {"status": None, "progress": 0.0, "last_chapter": 0, "last_scroll": 0.0, "highlights": []}
+    return {
+        "status": None,
+        "progress": 0.0,
+        "last_chapter": 0,
+        "last_scroll": 0.0,
+        # Per-chapter max scroll fraction ever reached, keyed by str(chapter_index).
+        # Monotonic per chapter. Drives the overall "percent read" (a length-weighted
+        # sum of each chapter's own fraction) and the "resume at earliest unfinished
+        # chapter" logic, instead of assuming every chapter before the current one
+        # has been fully read.
+        "chapter_progress": {},
+        "highlights": [],
+    }
+
+
+def _coerce_fraction(value) -> float:
+    """Best-effort float in [0, 1]; malformed/missing input reads as 0."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return min(max(f, 0.0), 1.0)
+
+
+def _migrate_chapter_progress(book_id: str, state: dict) -> dict:
+    """Derive a per-chapter progress map from an old-format state that only
+    tracked a single last_chapter/last_scroll pointer, seeded so the
+    previously displayed percentage doesn't regress: chapters before the old
+    last_chapter count as fully read (1.0), and the old last_chapter itself
+    is seeded with the old last_scroll fraction."""
+    lengths = chapter_lengths(book_id)
+    old_last_chapter = state.get("last_chapter") or 0
+    old_last_scroll = _coerce_fraction(state.get("last_scroll"))
+    migrated = {}
+    for i in range(len(lengths)):
+        if i < old_last_chapter:
+            migrated[str(i)] = 1.0
+        elif i == old_last_chapter:
+            migrated[str(i)] = old_last_scroll
+    return migrated
+
+
+def compute_overall_progress(book_id: str, chapter_progress: dict) -> float:
+    """Overall percent read = length-weighted sum of each chapter's own,
+    independently-tracked fraction -- not an assumption that every chapter
+    before the current one has been read in full."""
+    lengths = chapter_lengths(book_id)
+    if not lengths:
+        return 0.0
+    total = sum(lengths) or 1
+    chapter_progress = chapter_progress or {}
+    read_len = sum(
+        length * _coerce_fraction(chapter_progress.get(str(i), 0.0))
+        for i, length in enumerate(lengths)
+    )
+    return read_len / total
 
 
 def load_state(book_id: str) -> dict:
-    """Load state.json, filling in any missing keys with defaults."""
+    """Load state.json, filling in any missing keys with defaults.
+
+    Old-format files (no `chapter_progress` map) are migrated once, in
+    place, the first time they're loaded -- see `_migrate_chapter_progress` --
+    and the migration is saved immediately so it doesn't repeat on later loads.
+    """
     path = state_path(book_id)
     state = default_state()
+    stored = None
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -83,10 +144,23 @@ def load_state(book_id: str) -> dict:
             print(f"Error loading state {book_id}: {e}")
     # Normalize types
     state["highlights"] = state.get("highlights") or []
-    try:
-        state["progress"] = float(state.get("progress") or 0.0)
-    except (TypeError, ValueError):
-        state["progress"] = 0.0
+
+    had_chapter_progress = isinstance(stored, dict) and isinstance(stored.get("chapter_progress"), dict)
+    if had_chapter_progress:
+        state["chapter_progress"] = stored["chapter_progress"]
+    else:
+        state["chapter_progress"] = _migrate_chapter_progress(book_id, state)
+
+    state["progress"] = compute_overall_progress(book_id, state["chapter_progress"])
+
+    if not had_chapter_progress and os.path.exists(path):
+        # Persist the migration so it's a one-time event, not recomputed on
+        # every load (and so a later manual state.json edit can't undo it).
+        try:
+            save_state(book_id, state)
+        except Exception as e:
+            print(f"Error persisting migrated state {book_id}: {e}")
+
     return state
 
 
@@ -121,6 +195,29 @@ def derive_status(state: dict) -> str:
     if p > 0:
         return "in_progress"
     return "new"
+
+
+def resume_position(book_id: str, state: dict) -> tuple:
+    """Where "Continue" (library) and the reader's scroll-restore should land:
+    the lowest-indexed chapter whose own fraction is still below
+    READ_THRESHOLD (the same threshold used for book-level read/in_progress
+    status), at that chapter's own saved scroll fraction. If every chapter is
+    at/above the threshold, resume at the last chapter instead.
+
+    Unlike last_chapter/last_scroll (which track wherever the reader most
+    recently opened -- including a quick TOC preview of a later chapter),
+    this never jumps past chapters that haven't actually been finished.
+    """
+    lengths = chapter_lengths(book_id)
+    if not lengths:
+        return 0, 0.0
+    chapter_progress = state.get("chapter_progress") or {}
+    for i in range(len(lengths)):
+        frac = _coerce_fraction(chapter_progress.get(str(i), 0.0))
+        if frac < READ_THRESHOLD:
+            return i, frac
+    last = len(lengths) - 1
+    return last, _coerce_fraction(chapter_progress.get(str(last), 0.0))
 
 
 def chapter_title(book: Book, idx: int) -> str:
@@ -186,6 +283,7 @@ async def library_view(request: Request):
                     # reads front-to-back like the book, matching /api/export.
                     highlights_list = sorted(highlights, key=lambda h: h.get("chapter", 0))
                     cover_image = getattr(book, "cover_image", None)
+                    resume_chapter, _resume_scroll = resume_position(item, state)
                     books.append({
                         "id": item,
                         "title": book.metadata.title,
@@ -196,6 +294,9 @@ async def library_view(request: Request):
                         "highlights": len(highlights),
                         "highlights_list": highlights_list,
                         "last_chapter": state.get("last_chapter", 0),
+                        # Where "Continue" should reopen: the earliest chapter that
+                        # isn't fully read yet, not just wherever was last opened.
+                        "resume_chapter": resume_chapter,
                         "cover_url": f"/read/{item}/{cover_image}" if cover_image else None,
                     })
 
@@ -237,6 +338,8 @@ async def read_chapter(request: Request, book_id: str, chapter_index: int):
     chapter_soup = BeautifulSoup(current_chapter.content, "html.parser")
     chapter_html = str(strip_inline_colors(chapter_soup))
 
+    resume_chapter, resume_scroll = resume_position(book_id, state)
+
     return templates.TemplateResponse("reader.html", {
         "request": request,
         "book": book,
@@ -253,6 +356,10 @@ async def read_chapter(request: Request, book_id: str, chapter_index: int):
         "chapter_highlights": chapter_highlights,
         "last_chapter": state.get("last_chapter", 0),
         "last_scroll": state.get("last_scroll", 0.0),
+        # Scroll-restore-on-load targets the earliest unfinished chapter (ticket 02),
+        # not merely whatever chapter was last opened.
+        "resume_chapter": resume_chapter,
+        "resume_scroll": resume_scroll,
     })
 
 @app.get("/read/{book_id}/images/{image_name}")
@@ -287,25 +394,37 @@ def _require_book(book_id: str) -> Book:
 async def get_state(book_id: str):
     _require_book(book_id)
     state = load_state(book_id)
-    return {**state, "status": derive_status(state)}
+    resume_chapter, resume_scroll = resume_position(book_id, state)
+    return {
+        **state,
+        "status": derive_status(state),
+        "resume_chapter": resume_chapter,
+        "resume_scroll": resume_scroll,
+    }
 
 
 @app.post("/api/progress/{book_id}")
 async def update_progress(book_id: str, body: ProgressBody):
     _require_book(book_id)
     lengths = chapter_lengths(book_id)
-    total = sum(lengths) or 1
-    idx = max(0, min(body.chapter_index, len(lengths) - 1))
+    idx = max(0, min(body.chapter_index, len(lengths) - 1)) if lengths else 0
     frac = min(max(body.scroll_fraction, 0.0), 1.0)
 
-    read_len = sum(lengths[:idx]) + frac * lengths[idx]
-    computed = read_len / total
-
     state = load_state(book_id)
-    # Progress is monotonic: back-scrolling never lowers it.
-    state["progress"] = max(state.get("progress") or 0.0, computed)
+    chapter_progress = state.get("chapter_progress") or {}
+    # Scrolling in chapter `idx` updates only that chapter's own stored
+    # fraction (monotonic -- never decreases for that chapter). It does not
+    # touch any other chapter, so briefly previewing a later chapter no
+    # longer implicitly credits the ones skipped in between.
+    prev = _coerce_fraction(chapter_progress.get(str(idx), 0.0))
+    chapter_progress[str(idx)] = max(prev, frac)
+    state["chapter_progress"] = chapter_progress
+    # Overall percentage is the length-weighted sum of each chapter's own
+    # fraction -- naturally monotonic, since no per-chapter fraction ever decreases.
+    state["progress"] = compute_overall_progress(book_id, chapter_progress)
     # last_chapter/last_scroll track the ACTUAL current position (can move back)
-    # so we can resume exactly where the reader left off.
+    # so we know what was last opened; they no longer drive the resume target
+    # (see resume_position / ticket 02) but are kept for reference.
     state["last_chapter"] = idx
     state["last_scroll"] = frac
     save_state(book_id, state)
@@ -325,6 +444,7 @@ async def set_status(book_id: str, body: StatusBody):
         state["progress"] = 0.0
         state["last_chapter"] = 0
         state["last_scroll"] = 0.0
+        state["chapter_progress"] = {}
     save_state(book_id, state)
     return {"progress": state.get("progress", 0.0), "status": derive_status(state)}
 
