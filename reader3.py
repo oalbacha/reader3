@@ -309,9 +309,9 @@ def process_epub(epub_path: str, output_dir: str) -> Book:
     # 3. Prepare Output Directories
     # Only clear the images/ subdirectory (fully regenerated below) --
     # never rmtree the whole output_dir. state.json (reading progress,
-    # highlights, notes -- see server.py's load_state/save_state) lives
-    # alongside book.pkl in this same directory, and reprocessing an
-    # already-read book must not destroy it.
+    # highlights, notes -- see reading_state.ReadingState) lives alongside
+    # book.pkl in this same directory, and reprocessing an already-read book
+    # must not destroy it.
     images_dir = os.path.join(output_dir, 'images')
     if os.path.exists(images_dir):
         shutil.rmtree(images_dir)

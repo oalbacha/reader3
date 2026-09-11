@@ -1,4 +1,4 @@
-import server
+from reading_state import READ_THRESHOLD
 
 # Fixture book chapters are 100/200/300 chars (see tests/booklib.py), so the
 # math below is checkable by hand.
@@ -33,7 +33,7 @@ def test_overall_progress_is_length_weighted_across_chapters(client, fixture_boo
 
 def test_resume_position_is_the_earliest_chapter_below_threshold(client, fixture_book):
     book_id, _book, _lengths = fixture_book
-    assert server.READ_THRESHOLD == 0.95
+    assert READ_THRESHOLD == 0.95
 
     client.post(f"/api/progress/{book_id}", json={"chapter_index": 0, "scroll_fraction": 1.0})
     client.post(f"/api/progress/{book_id}", json={"chapter_index": 1, "scroll_fraction": 0.9})

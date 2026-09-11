@@ -1,9 +1,8 @@
 import os
-import json
 import pickle
 import shutil
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from functools import lru_cache
 from typing import Optional
 
@@ -16,6 +15,7 @@ from pydantic import BaseModel
 
 from obsidian_sync import sync_book_notes
 from reader3 import Book, BookMetadata, ChapterContent, TOCEntry, strip_inline_colors
+from reading_state import ReadingState
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -26,9 +26,6 @@ BOOKS_DIR = "."
 
 # Soft-deleted books are moved here rather than permanently erased.
 TRASH_DIR = os.path.join(BOOKS_DIR, ".trash")
-
-# Progress fraction at/above which a book counts as "read".
-READ_THRESHOLD = 0.95
 
 @lru_cache(maxsize=10)
 def load_book_cached(folder_name: str) -> Optional[Book]:
@@ -51,136 +48,9 @@ def load_book_cached(folder_name: str) -> Optional[Book]:
 
 # --- Reading state (status / progress / highlights) ---
 #
-# Per-book user state lives in `<book>_data/state.json`, right next to book.pkl.
-# It is read fresh on every request (NOT lru_cached like the book) because it
-# changes at runtime. Deleting a book folder also deletes its state.
-
-def _safe_book_dir(book_id: str) -> str:
-    """Resolve a book folder inside BOOKS_DIR, guarding against path escapes."""
-    safe_id = os.path.basename(book_id)
-    return os.path.join(BOOKS_DIR, safe_id)
-
-
-def state_path(book_id: str) -> str:
-    return os.path.join(_safe_book_dir(book_id), "state.json")
-
-
-def default_state() -> dict:
-    return {
-        "status": None,
-        "progress": 0.0,
-        # Per-chapter max scroll fraction ever reached, keyed by str(chapter_index).
-        # Monotonic per chapter. Drives the overall "percent read" (a length-weighted
-        # sum of each chapter's own fraction) and the "resume at earliest unfinished
-        # chapter" logic, instead of assuming every chapter before the current one
-        # has been fully read.
-        "chapter_progress": {},
-        "highlights": [],
-        "archived": False,
-    }
-
-
-def _coerce_fraction(value) -> float:
-    """Best-effort float in [0, 1]; malformed/missing input reads as 0."""
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    return min(max(f, 0.0), 1.0)
-
-
-def _migrate_chapter_progress(book_id: str, state: dict) -> dict:
-    """Derive a per-chapter progress map from an old-format state that only
-    tracked a single last_chapter/last_scroll pointer, seeded so the
-    previously displayed percentage doesn't regress: chapters before the old
-    last_chapter count as fully read (1.0), and the old last_chapter itself
-    is seeded with the old last_scroll fraction."""
-    lengths = chapter_lengths(book_id)
-    old_last_chapter = state.get("last_chapter") or 0
-    old_last_scroll = _coerce_fraction(state.get("last_scroll"))
-    migrated = {}
-    for i in range(len(lengths)):
-        if i < old_last_chapter:
-            migrated[str(i)] = 1.0
-        elif i == old_last_chapter:
-            migrated[str(i)] = old_last_scroll
-    return migrated
-
-
-def compute_overall_progress(book_id: str, chapter_progress: dict) -> float:
-    """Overall percent read = length-weighted sum of each chapter's own,
-    independently-tracked fraction -- not an assumption that every chapter
-    before the current one has been read in full."""
-    lengths = chapter_lengths(book_id)
-    if not lengths:
-        return 0.0
-    total = sum(lengths) or 1
-    chapter_progress = chapter_progress or {}
-    read_len = sum(
-        length * _coerce_fraction(chapter_progress.get(str(i), 0.0))
-        for i, length in enumerate(lengths)
-    )
-    return read_len / total
-
-
-def load_state(book_id: str) -> dict:
-    """Load state.json, filling in any missing keys with defaults.
-
-    Old-format files (no `chapter_progress` map) are migrated once, in
-    place, the first time they're loaded -- see `_migrate_chapter_progress` --
-    and the migration is saved immediately so it doesn't repeat on later loads.
-    """
-    path = state_path(book_id)
-    state = default_state()
-    stored = None
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                stored = json.load(f)
-            if isinstance(stored, dict):
-                state.update(stored)
-        except Exception as e:
-            print(f"Error loading state {book_id}: {e}")
-    # Normalize types
-    state["highlights"] = state.get("highlights") or []
-    state["archived"] = bool(state.get("archived", False))
-
-    had_chapter_progress = isinstance(stored, dict) and isinstance(stored.get("chapter_progress"), dict)
-    if had_chapter_progress:
-        state["chapter_progress"] = stored["chapter_progress"]
-    else:
-        state["chapter_progress"] = _migrate_chapter_progress(book_id, state)
-
-    # Retired in favor of chapter_progress/resume_position; drop them from any
-    # legacy file that still has them (state.update(stored) above would have
-    # carried them over) rather than keep resaving dead fields forever.
-    state.pop("last_chapter", None)
-    state.pop("last_scroll", None)
-
-    state["progress"] = compute_overall_progress(book_id, state["chapter_progress"])
-
-    if not had_chapter_progress and os.path.exists(path):
-        # Persist the migration so it's a one-time event, not recomputed on
-        # every load (and so a later manual state.json edit can't undo it).
-        try:
-            save_state(book_id, state)
-        except Exception as e:
-            print(f"Error persisting migrated state {book_id}: {e}")
-
-    return state
-
-
-def save_state(book_id: str, state: dict) -> None:
-    """Atomically write state.json (temp file + os.replace)."""
-    path = state_path(book_id)
-    book_dir = os.path.dirname(path)
-    if not os.path.isdir(book_dir):
-        raise HTTPException(status_code=404, detail="Book not found")
-    tmp = f"{path}.{uuid.uuid4().hex}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
-
+# Per-book user state lives in `<book>_data/state.json`, right next to
+# book.pkl, owned entirely by the ReadingState class (reading_state.py).
+# Deleting a book folder also deletes its state.
 
 @lru_cache(maxsize=10)
 def chapter_lengths(book_id: str) -> tuple:
@@ -191,40 +61,10 @@ def chapter_lengths(book_id: str) -> tuple:
     return tuple(max(len(ch.text or ""), 1) for ch in book.spine)
 
 
-def derive_status(state: dict) -> str:
-    """Resolve the effective status: manual override, else from progress."""
-    if state.get("status") == "read":
-        return "read"
-    p = state.get("progress") or 0.0
-    if p >= READ_THRESHOLD:
-        return "read"
-    if p > 0:
-        return "in_progress"
-    return "new"
-
-
-def resume_position(book_id: str, state: dict) -> tuple:
-    """Where "Continue" (library) and the reader's scroll-restore should land:
-    the lowest-indexed chapter whose own fraction is still below
-    READ_THRESHOLD (the same threshold used for book-level read/in_progress
-    status), at that chapter's own saved scroll fraction. If every chapter is
-    at/above the threshold, resume at the last chapter instead.
-
-    Unlike simply tracking wherever the reader most recently opened
-    (which a quick TOC preview of a later chapter would move past the
-    earliest unfinished one), this never jumps past chapters that
-    haven't actually been finished.
-    """
-    lengths = chapter_lengths(book_id)
-    if not lengths:
-        return 0, 0.0
-    chapter_progress = state.get("chapter_progress") or {}
-    for i in range(len(lengths)):
-        frac = _coerce_fraction(chapter_progress.get(str(i), 0.0))
-        if frac < READ_THRESHOLD:
-            return i, frac
-    last = len(lengths) - 1
-    return last, _coerce_fraction(chapter_progress.get(str(last), 0.0))
+def _load_state(book_id: str) -> ReadingState:
+    """Load `book_id`'s ReadingState, so callers can't forget to pair it with
+    the right chapter_lengths/BOOKS_DIR."""
+    return ReadingState.load(book_id, chapter_lengths(book_id), BOOKS_DIR)
 
 
 def chapter_title(book: Book, idx: int) -> str:
@@ -289,22 +129,22 @@ def _scan_books(archived: bool) -> list:
                 # Try to load it to get the title
                 book = load_book_cached(item)
                 if book:
-                    state = load_state(item)
-                    if bool(state.get("archived", False)) != archived:
+                    state = _load_state(item)
+                    if state.archived != archived:
                         continue
-                    highlights = state.get("highlights") or []
+                    highlights = state.highlights
                     # Sort by book/spine order (not creation order) so the list
                     # reads front-to-back like the book, matching /api/export.
                     highlights_list = sorted(highlights, key=lambda h: h.get("chapter", 0))
                     cover_image = getattr(book, "cover_image", None)
-                    resume_chapter, _resume_scroll = resume_position(item, state)
+                    resume_chapter, _resume_scroll = state.resume_position()
                     books.append({
                         "id": item,
                         "title": book.metadata.title,
                         "author": ", ".join(book.metadata.authors),
                         "chapters": len(book.spine),
-                        "status": derive_status(state),
-                        "progress": round((state.get("progress") or 0.0) * 100),
+                        "status": state.derive_status(),
+                        "progress": round(state.progress * 100),
                         "highlights": len(highlights),
                         "highlights_list": highlights_list,
                         # Where "Continue" should reopen: the earliest chapter that
@@ -365,8 +205,8 @@ async def read_chapter(request: Request, book_id: str, chapter_index: int):
     prev_idx = chapter_index - 1 if chapter_index > 0 else None
     next_idx = chapter_index + 1 if chapter_index < len(book.spine) - 1 else None
 
-    state = load_state(book_id)
-    highlights = state.get("highlights") or []
+    state = _load_state(book_id)
+    highlights = state.highlights
     chapter_highlights = [h for h in highlights if h.get("chapter") == chapter_index]
 
     # Some already-processed EPUBs bake hardcoded colors into chapter HTML
@@ -376,7 +216,7 @@ async def read_chapter(request: Request, book_id: str, chapter_index: int):
     chapter_soup = BeautifulSoup(current_chapter.content, "html.parser")
     chapter_html = str(strip_inline_colors(chapter_soup))
 
-    resume_chapter, resume_scroll = resume_position(book_id, state)
+    resume_chapter, resume_scroll = state.resume_position()
 
     return templates.TemplateResponse("reader.html", {
         "request": request,
@@ -388,8 +228,8 @@ async def read_chapter(request: Request, book_id: str, chapter_index: int):
         "prev_idx": prev_idx,
         "next_idx": next_idx,
         "total_chapters": len(book.spine),
-        "status": derive_status(state),
-        "progress_pct": round((state.get("progress") or 0.0) * 100),
+        "status": state.derive_status(),
+        "progress_pct": round(state.progress * 100),
         "highlights": highlights,
         "chapter_highlights": chapter_highlights,
         # Scroll-restore-on-load targets the earliest unfinished chapter (ticket 02),
@@ -405,11 +245,9 @@ async def serve_image(book_id: str, image_name: str):
     The HTML contains <img src="images/pic.jpg">.
     The browser resolves this to /read/{book_id}/images/pic.jpg.
     """
-    # Security check: ensure book_id is clean
-    safe_book_id = os.path.basename(book_id)
+    # Security check: ensure book_id/image_name are clean
     safe_image_name = os.path.basename(image_name)
-
-    img_path = os.path.join(BOOKS_DIR, safe_book_id, "images", safe_image_name)
+    img_path = os.path.join(_book_dir(book_id), "images", safe_image_name)
 
     if not os.path.exists(img_path):
         raise HTTPException(status_code=404, detail="Image not found")
@@ -426,14 +264,22 @@ def _require_book(book_id: str) -> Book:
     return book
 
 
+def _book_dir(book_id: str) -> str:
+    """Resolve a book folder inside BOOKS_DIR, guarding against path escapes."""
+    return os.path.join(BOOKS_DIR, os.path.basename(book_id))
+
+
 @app.get("/api/state/{book_id}")
 async def get_state(book_id: str):
     _require_book(book_id)
-    state = load_state(book_id)
-    resume_chapter, resume_scroll = resume_position(book_id, state)
+    state = _load_state(book_id)
+    resume_chapter, resume_scroll = state.resume_position()
     return {
-        **state,
-        "status": derive_status(state),
+        "status": state.derive_status(),
+        "progress": state.progress,
+        "chapter_progress": state.chapter_progress,
+        "highlights": state.highlights,
+        "archived": state.archived,
         "resume_chapter": resume_chapter,
         "resume_scroll": resume_scroll,
     }
@@ -442,24 +288,9 @@ async def get_state(book_id: str):
 @app.post("/api/progress/{book_id}")
 async def update_progress(book_id: str, body: ProgressBody):
     _require_book(book_id)
-    lengths = chapter_lengths(book_id)
-    idx = max(0, min(body.chapter_index, len(lengths) - 1)) if lengths else 0
-    frac = min(max(body.scroll_fraction, 0.0), 1.0)
-
-    state = load_state(book_id)
-    chapter_progress = state.get("chapter_progress") or {}
-    # Scrolling in chapter `idx` updates only that chapter's own stored
-    # fraction (monotonic -- never decreases for that chapter). It does not
-    # touch any other chapter, so briefly previewing a later chapter no
-    # longer implicitly credits the ones skipped in between.
-    prev = _coerce_fraction(chapter_progress.get(str(idx), 0.0))
-    chapter_progress[str(idx)] = max(prev, frac)
-    state["chapter_progress"] = chapter_progress
-    # Overall percentage is the length-weighted sum of each chapter's own
-    # fraction -- naturally monotonic, since no per-chapter fraction ever decreases.
-    state["progress"] = compute_overall_progress(book_id, chapter_progress)
-    save_state(book_id, state)
-    return {"progress": state["progress"], "status": derive_status(state)}
+    state = _load_state(book_id)
+    state.record_progress(body.chapter_index, body.scroll_fraction)
+    return {"progress": state.progress, "status": state.derive_status()}
 
 
 @app.post("/api/status/{book_id}")
@@ -467,15 +298,9 @@ async def set_status(book_id: str, body: StatusBody):
     _require_book(book_id)
     if body.status not in (None, "read"):
         raise HTTPException(status_code=400, detail="status must be 'read' or null")
-    state = load_state(book_id)
-    state["status"] = body.status
-    # Marking unread must also clear progress; otherwise derive_status() would
-    # re-derive "read" from a finished book's progress and the toggle would appear to do nothing.
-    if body.status is None:
-        state["progress"] = 0.0
-        state["chapter_progress"] = {}
-    save_state(book_id, state)
-    return {"progress": state.get("progress", 0.0), "status": derive_status(state)}
+    state = _load_state(book_id)
+    state.set_status(body.status)
+    return {"progress": state.progress, "status": state.derive_status()}
 
 
 @app.post("/api/archive/{book_id}")
@@ -484,10 +309,9 @@ async def set_archived(book_id: str, body: ArchiveBody):
     /api/remove, this never touches the book's folder, progress, highlights,
     or status."""
     _require_book(book_id)
-    state = load_state(book_id)
-    state["archived"] = body.archived
-    save_state(book_id, state)
-    return {"archived": state["archived"]}
+    state = _load_state(book_id)
+    state.set_archived(body.archived)
+    return {"archived": state.archived}
 
 
 @app.post("/api/highlights/{book_id}")
@@ -496,20 +320,15 @@ async def add_highlight(book_id: str, body: HighlightBody):
     text = body.text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="Empty highlight")
-    highlight = {
-        "id": "h_" + uuid.uuid4().hex[:10],
-        "chapter": body.chapter,
-        "chapter_title": chapter_title(book, body.chapter),
-        "text": text,
-        "offset": body.offset,
-        "note": body.note or "",
-        "kind": "highlight",
-        "ts": datetime.now(timezone.utc).isoformat(),
-    }
-    state = load_state(book_id)
-    state["highlights"].append(highlight)
-    save_state(book_id, state)
-    _sync_obsidian(book, state)
+    state = _load_state(book_id)
+    highlight = state.add_highlight(
+        chapter=body.chapter,
+        chapter_title=chapter_title(book, body.chapter),
+        text=text,
+        note=body.note or "",
+        offset=body.offset,
+    )
+    _sync_obsidian(book, state.highlights)
     return highlight
 
 
@@ -524,41 +343,32 @@ async def add_note(book_id: str, body: NoteBody):
     text = body.text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="Empty note")
-    note = {
-        "id": "n_" + uuid.uuid4().hex[:10],
-        "chapter": body.chapter,
-        "chapter_title": chapter_title(book, body.chapter),
-        "text": text,
-        "note": "",
-        "kind": "note",
-        "ts": datetime.now(timezone.utc).isoformat(),
-    }
-    state = load_state(book_id)
-    state["highlights"].append(note)
-    save_state(book_id, state)
-    _sync_obsidian(book, state)
+    state = _load_state(book_id)
+    note = state.add_note(
+        chapter=body.chapter,
+        chapter_title=chapter_title(book, body.chapter),
+        text=text,
+    )
+    _sync_obsidian(book, state.highlights)
     return note
 
 
 @app.delete("/api/highlights/{book_id}/{highlight_id}")
 async def delete_highlight(book_id: str, highlight_id: str):
     book = _require_book(book_id)
-    state = load_state(book_id)
-    before = len(state["highlights"])
-    state["highlights"] = [h for h in state["highlights"] if h.get("id") != highlight_id]
-    if len(state["highlights"]) == before:
+    state = _load_state(book_id)
+    if not state.delete_highlight(highlight_id):
         raise HTTPException(status_code=404, detail="Highlight not found")
-    save_state(book_id, state)
     # Removing the last highlight removes the book's note from the vault.
-    _sync_obsidian(book, state)
+    _sync_obsidian(book, state.highlights)
     return {"ok": True}
 
 
 @app.get("/api/export/{book_id}")
 async def export_highlights(book_id: str):
     book = _require_book(book_id)
-    state = load_state(book_id)
-    highlights = state.get("highlights") or []
+    state = _load_state(book_id)
+    highlights = state.highlights
 
     title = book.metadata.title or "Untitled"
     author = ", ".join(book.metadata.authors)
@@ -603,7 +413,7 @@ async def remove_book(book_id: str):
     permanently erasing it, so it stays recoverable. The source .epub file
     (which lives outside this folder) is never touched.
     """
-    book_dir = _safe_book_dir(book_id)
+    book_dir = _book_dir(book_id)
     if not os.path.isdir(book_dir):
         raise HTTPException(status_code=404, detail="Book not found")
     os.makedirs(TRASH_DIR, exist_ok=True)
@@ -618,11 +428,11 @@ async def remove_book(book_id: str):
 
 # --- Obsidian sync ---
 
-def _sync_obsidian(book: Book, state: dict) -> None:
+def _sync_obsidian(book: Book, highlights: list) -> None:
     """Best-effort sync of this book's highlights/notes to the Obsidian
     vault. Never let a vault problem break reading — log and move on."""
     try:
-        sync_book_notes(book, state.get("highlights") or [])
+        sync_book_notes(book, highlights)
     except Exception as e:
         print(f"[obsidian] Sync failed for {getattr(book.metadata, 'title', '?')}: {e}")
 
@@ -638,8 +448,8 @@ def sync_all_obsidian_notes() -> int:
         book = load_book_cached(item)
         if not book:
             continue
-        state = load_state(item)
-        path = sync_book_notes(book, state.get("highlights") or [])
+        state = _load_state(item)
+        path = sync_book_notes(book, state.highlights)
         if path:
             written += 1
     return written
