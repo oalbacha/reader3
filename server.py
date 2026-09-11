@@ -22,7 +22,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 # Where are the book folders located?
-BOOKS_DIR = "."
+BOOKS_DIR = "library"
 
 # Soft-deleted books are moved here rather than permanently erased.
 TRASH_DIR = os.path.join(BOOKS_DIR, ".trash")
@@ -125,7 +125,7 @@ def _scan_books(archived: bool) -> list:
 
     if os.path.exists(BOOKS_DIR):
         for item in os.listdir(BOOKS_DIR):
-            if item.endswith("_data") and os.path.isdir(item):
+            if item.endswith("_data") and os.path.isdir(os.path.join(BOOKS_DIR, item)):
                 # Try to load it to get the title
                 book = load_book_cached(item)
                 if book:
@@ -443,7 +443,7 @@ def sync_all_obsidian_notes() -> int:
     the number of notes written."""
     written = 0
     for item in os.listdir(BOOKS_DIR):
-        if not (item.endswith("_data") and os.path.isdir(item)):
+        if not (item.endswith("_data") and os.path.isdir(os.path.join(BOOKS_DIR, item))):
             continue
         book = load_book_cached(item)
         if not book:
