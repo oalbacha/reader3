@@ -3,12 +3,15 @@
 <div class="book-card" data-book-id="{{ book.id }}" data-title="{{ book.title }}"
      data-href="/read/{{ book.id }}/{{ start }}" data-status="{{ book.status }}"
      data-archived="{{ 'true' if book.archived else 'false' }}"
-     data-highlights="{{ book.highlights_list | tojson | forceescape }}"
-     title="{{ book.title }}">
+     data-highlights="{{ book.highlights_list | tojson | forceescape }}">
     {% if book.cover_url %}
         <img class="book-cover" src="{{ book.cover_url }}" alt="" loading="lazy">
     {% else %}
-        <div class="book-cover book-cover-placeholder"><svg class="icon" width="40" height="40"><use href="#icon-book"/></svg></div>
+        <div class="book-cover book-cover-placeholder">
+            <span class="placeholder-title">{{ book.title }}</span>
+            <svg class="icon" width="34" height="34"><use href="#icon-book"/></svg>
+            {% if book.author %}<span class="placeholder-author">{{ book.author }}</span>{% endif %}
+        </div>
     {% endif %}
 
     <div class="card-meta-row">
