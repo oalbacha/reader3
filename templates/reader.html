@@ -298,7 +298,6 @@
             pill.textContent = STATUS_LABELS[status];
             document.getElementById('progress-label').textContent = pct + '% read';
             document.getElementById('footer-progress').textContent = pct + '%';
-            document.getElementById('top-progress-fill').style.width = pct + '%';
         }
 
         // ---- Progress tracking (scroll-weighted) ----
@@ -308,6 +307,12 @@
             const scrollable = main.scrollHeight - main.clientHeight;
             if (scrollable <= 0) return 1.0; // short chapter fully visible
             return Math.min(Math.max(main.scrollTop / scrollable, 0), 1);
+        }
+
+        // Top bar reflects how far into *this chapter* you've scrolled, distinct
+        // from progress-label/footer-progress which show the book-wide percentage.
+        function updateTopProgress() {
+            document.getElementById('top-progress-fill').style.width = Math.round(scrollFraction() * 100) + '%';
         }
 
         function postProgress(useBeacon) {
@@ -331,6 +336,7 @@
 
         let progressTimer = null;
         main.addEventListener('scroll', () => {
+            updateTopProgress();
             if (progressTimer) return;
             progressTimer = setTimeout(() => {
                 progressTimer = null;
@@ -347,6 +353,7 @@
                 const scrollable = main.scrollHeight - main.clientHeight;
                 if (scrollable > 0) main.scrollTop = RESUME_SCROLL * scrollable;
             }
+            updateTopProgress();
             // Record current position (also covers short chapters that never scroll).
             postProgress(false);
         }
