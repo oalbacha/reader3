@@ -69,8 +69,6 @@ def default_state() -> dict:
     return {
         "status": None,
         "progress": 0.0,
-        "last_chapter": 0,
-        "last_scroll": 0.0,
         # Per-chapter max scroll fraction ever reached, keyed by str(chapter_index).
         # Monotonic per chapter. Drives the overall "percent read" (a length-weighted
         # sum of each chapter's own fraction) and the "resume at earliest unfinished
@@ -153,6 +151,12 @@ def load_state(book_id: str) -> dict:
     else:
         state["chapter_progress"] = _migrate_chapter_progress(book_id, state)
 
+    # Retired in favor of chapter_progress/resume_position; drop them from any
+    # legacy file that still has them (state.update(stored) above would have
+    # carried them over) rather than keep resaving dead fields forever.
+    state.pop("last_chapter", None)
+    state.pop("last_scroll", None)
+
     state["progress"] = compute_overall_progress(book_id, state["chapter_progress"])
 
     if not had_chapter_progress and os.path.exists(path):
@@ -206,9 +210,10 @@ def resume_position(book_id: str, state: dict) -> tuple:
     status), at that chapter's own saved scroll fraction. If every chapter is
     at/above the threshold, resume at the last chapter instead.
 
-    Unlike last_chapter/last_scroll (which track wherever the reader most
-    recently opened -- including a quick TOC preview of a later chapter),
-    this never jumps past chapters that haven't actually been finished.
+    Unlike simply tracking wherever the reader most recently opened
+    (which a quick TOC preview of a later chapter would move past the
+    earliest unfinished one), this never jumps past chapters that
+    haven't actually been finished.
     """
     lengths = chapter_lengths(book_id)
     if not lengths:
@@ -302,7 +307,6 @@ def _scan_books(archived: bool) -> list:
                         "progress": round((state.get("progress") or 0.0) * 100),
                         "highlights": len(highlights),
                         "highlights_list": highlights_list,
-                        "last_chapter": state.get("last_chapter", 0),
                         # Where "Continue" should reopen: the earliest chapter that
                         # isn't fully read yet, not just wherever was last opened.
                         "resume_chapter": resume_chapter,
@@ -388,8 +392,6 @@ async def read_chapter(request: Request, book_id: str, chapter_index: int):
         "progress_pct": round((state.get("progress") or 0.0) * 100),
         "highlights": highlights,
         "chapter_highlights": chapter_highlights,
-        "last_chapter": state.get("last_chapter", 0),
-        "last_scroll": state.get("last_scroll", 0.0),
         # Scroll-restore-on-load targets the earliest unfinished chapter (ticket 02),
         # not merely whatever chapter was last opened.
         "resume_chapter": resume_chapter,
@@ -456,11 +458,6 @@ async def update_progress(book_id: str, body: ProgressBody):
     # Overall percentage is the length-weighted sum of each chapter's own
     # fraction -- naturally monotonic, since no per-chapter fraction ever decreases.
     state["progress"] = compute_overall_progress(book_id, chapter_progress)
-    # last_chapter/last_scroll track the ACTUAL current position (can move back)
-    # so we know what was last opened; they no longer drive the resume target
-    # (see resume_position / ticket 02) but are kept for reference.
-    state["last_chapter"] = idx
-    state["last_scroll"] = frac
     save_state(book_id, state)
     return {"progress": state["progress"], "status": derive_status(state)}
 
@@ -476,8 +473,6 @@ async def set_status(book_id: str, body: StatusBody):
     # re-derive "read" from a finished book's progress and the toggle would appear to do nothing.
     if body.status is None:
         state["progress"] = 0.0
-        state["last_chapter"] = 0
-        state["last_scroll"] = 0.0
         state["chapter_progress"] = {}
     save_state(book_id, state)
     return {"progress": state.get("progress", 0.0), "status": derive_status(state)}
