@@ -9,6 +9,7 @@
         })();
     </script>
     <link rel="stylesheet" href="/static/theme.css?v=5">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ book.metadata.title }}</title>
     <style>
@@ -19,12 +20,12 @@
         #sidebar { width: 300px; min-width: 180px; max-width: 500px; background: var(--surface); border-right: 1px solid var(--border); overflow-y: auto; padding: 20px; flex-shrink: 0; transition: width 0.15s ease; box-sizing: border-box; }
         #sidebar.no-transition { transition: none; }
         .nav-header { font-family: -apple-system, sans-serif; font-weight: bold; color: var(--text); margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid var(--border-strong); }
-        .nav-home { display: block; margin-bottom: 20px; color: var(--accent); text-decoration: none; font-family: -apple-system, sans-serif; font-size: 0.9em; }
+        .nav-home { display: flex; align-items: center; gap: 5px; margin-bottom: 20px; color: var(--accent); text-decoration: none; font-family: -apple-system, sans-serif; font-size: 0.9em; }
         .sidebar-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 20px; }
         .sidebar-top .nav-home { margin-bottom: 0; }
         .sidebar-top-buttons { display: flex; gap: 6px; flex-shrink: 0; }
         #sidebar-toggle, #theme-toggle { background: none; border: 1px solid var(--border-strong); border-radius: 4px; color: var(--text); cursor: pointer;
-                          font-family: -apple-system, sans-serif; font-size: 0.9em; line-height: 1; padding: 4px 8px; flex-shrink: 0; }
+                          display: inline-flex; align-items: center; justify-content: center; line-height: 1; padding: 6px; flex-shrink: 0; }
         #sidebar-toggle:hover, #theme-toggle:hover { background: var(--icon-btn-hover-bg); }
 
         /* Resize handle */
@@ -42,8 +43,13 @@
         #sidebar.collapsed #sidebar-icons { display: flex; }
         .sidebar-icon-btn { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
                              background: none; border: 1px solid transparent; border-radius: 6px; color: var(--text);
-                             cursor: pointer; font-size: 1.1em; }
+                             cursor: pointer; }
         .sidebar-icon-btn:hover { background: var(--icon-btn-hover-bg); border-color: var(--icon-btn-border); }
+
+        /* Shared icon sizing: every icon is an inline SVG referencing a
+           <symbol> from _icons.html via <use>, colored by the surrounding
+           element's `color` (currentColor) -- never a fixed color of its own. */
+        .icon { display: block; flex-shrink: 0; }
 
         /* TOC Tree */
         ul.toc-list { list-style: none; padding-left: 0; margin: 0; }
@@ -129,22 +135,23 @@
     </style>
 </head>
 <body>
+    {% include "_icons.html" %}
 
     <div id="top-progress"><div id="top-progress-fill"></div></div>
 
     <!-- SIDEBAR -->
     <div id="sidebar">
         <div class="sidebar-top">
-            <a href="/" class="nav-home">← Back to Library</a>
+            <a href="/" class="nav-home"><svg class="icon" width="14" height="14"><use href="#icon-library"/></svg>Back to Library</a>
             <div class="sidebar-top-buttons">
-                <button type="button" id="theme-toggle" title="Theme">🖥</button>
-                <button type="button" id="sidebar-toggle" title="Collapse sidebar">«</button>
+                <button type="button" id="theme-toggle" title="Theme"><svg class="icon" width="16" height="16"><use href="#icon-monitor"/></svg></button>
+                <button type="button" id="sidebar-toggle" title="Collapse sidebar"><svg class="icon" width="16" height="16"><use href="#icon-chevrons-left"/></svg></button>
             </div>
         </div>
         <div id="sidebar-icons">
-            <button type="button" class="sidebar-icon-btn" id="icon-home" title="Back to Library">←</button>
-            <button type="button" class="sidebar-icon-btn" id="icon-toc" title="Contents">☰</button>
-            <button type="button" class="sidebar-icon-btn" id="icon-note" title="Add note">✎</button>
+            <button type="button" class="sidebar-icon-btn" id="icon-home" title="Back to Library"><svg class="icon" width="18" height="18"><use href="#icon-library"/></svg></button>
+            <button type="button" class="sidebar-icon-btn" id="icon-toc" title="Chapters"><svg class="icon" width="18" height="18"><use href="#icon-list"/></svg></button>
+            <button type="button" class="sidebar-icon-btn" id="icon-note" title="Add note"><svg class="icon" width="18" height="18"><use href="#icon-pencil"/></svg></button>
         </div>
         <div class="nav-header">{{ book.metadata.title }}</div>
 
@@ -399,10 +406,11 @@
         }
 
         // ---- Theme: light / dark / auto cycle, persisted in localStorage ----
-        const THEME_ICONS = {light: '☀', dark: '☾', auto: '🖥'};
+        const THEME_ICONS = {light: 'icon-sun', dark: 'icon-moon', auto: 'icon-monitor'};
         const THEME_LABELS = {light: 'Light', dark: 'Dark', auto: 'Auto (matches system)'};
         const THEME_NEXT = {light: 'dark', dark: 'auto', auto: 'light'};
         const themeToggle = document.getElementById('theme-toggle');
+        const themeToggleUse = themeToggle.querySelector('use');
 
         function currentTheme() {
             const m = localStorage.getItem('theme');
@@ -417,7 +425,7 @@
                 document.documentElement.setAttribute('data-theme', mode);
                 localStorage.setItem('theme', mode);
             }
-            themeToggle.textContent = THEME_ICONS[mode];
+            themeToggleUse.setAttribute('href', '#' + THEME_ICONS[mode]);
             themeToggle.title = 'Theme: ' + THEME_LABELS[mode] + ' — click to switch to ' + THEME_LABELS[THEME_NEXT[mode]];
         }
 
@@ -428,13 +436,15 @@
         const sidebar = document.getElementById('sidebar');
         const sidebarResizer = document.getElementById('sidebar-resizer');
         const sidebarToggle = document.getElementById('sidebar-toggle');
+        const sidebarToggleUse = sidebarToggle.querySelector('use');
         const SIDEBAR_MIN = 180;
         const SIDEBAR_MAX = 500;
         const SIDEBAR_DEFAULT = 300;
 
         function setToggleLabel() {
-            sidebarToggle.textContent = sidebar.classList.contains('collapsed') ? '»' : '«';
-            sidebarToggle.title = sidebar.classList.contains('collapsed') ? 'Expand sidebar' : 'Collapse sidebar';
+            const collapsed = sidebar.classList.contains('collapsed');
+            sidebarToggleUse.setAttribute('href', collapsed ? '#icon-chevrons-right' : '#icon-chevrons-left');
+            sidebarToggle.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
         }
 
         function collapseSidebar() {

@@ -3,7 +3,8 @@
 <div class="book-card" data-book-id="{{ book.id }}" data-title="{{ book.title }}"
      data-href="/read/{{ book.id }}/{{ start }}" data-status="{{ book.status }}"
      data-archived="{{ 'true' if book.archived else 'false' }}"
-     data-highlights="{{ book.highlights_list | tojson | forceescape }}">
+     data-highlights="{{ book.highlights_list | tojson | forceescape }}"
+     title="{{ book.title }}">
     {% if book.cover_url %}
         <img class="book-cover" src="{{ book.cover_url }}" alt="" loading="lazy">
     {% else %}
