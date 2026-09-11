@@ -5,7 +5,21 @@ from fastapi.testclient import TestClient
 
 import obsidian_sync
 import server
+import upload_jobs
 from tests.booklib import DEFAULT_CHAPTER_LENGTHS, make_book, write_book
+
+
+@pytest.fixture(autouse=True)
+def _clean_upload_jobs():
+    """upload_jobs' job store and in-flight set are module-level globals, so
+    without this they'd leak across tests within the same pytest process --
+    e.g. a book_id left "in flight" by one test would make try_create_job
+    spuriously refuse a same-named job in the next."""
+    upload_jobs._jobs.clear()
+    upload_jobs._in_flight_book_ids.clear()
+    yield
+    upload_jobs._jobs.clear()
+    upload_jobs._in_flight_book_ids.clear()
 
 
 @pytest.fixture

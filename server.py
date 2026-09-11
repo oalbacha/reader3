@@ -1,20 +1,23 @@
 import os
 import pickle
 import shutil
+import tempfile
 import uuid
 from datetime import datetime
 from functools import lru_cache
 from typing import Optional
 
 from bs4 import BeautifulSoup
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
+import upload_jobs
 from obsidian_sync import sync_book_notes
-from reader3 import Book, BookMetadata, ChapterContent, TOCEntry, strip_inline_colors
+from reader3 import Book, BookMetadata, ChapterContent, TOCEntry, process_epub, save_to_pickle, strip_inline_colors
 from reading_state import ReadingState
 
 app = FastAPI()
@@ -424,6 +427,122 @@ async def remove_book(book_id: str):
     shutil.move(book_dir, dest)
     load_book_cached.cache_clear()
     return {"ok": True}
+
+
+# --- Upload & background processing ---
+
+async def _read_with_limit(file: UploadFile, limit: int) -> Optional[bytes]:
+    """Read an UploadFile's contents, bailing out (returning None) as soon as
+    the size cap is exceeded rather than buffering an oversized file fully
+    into memory first."""
+    chunk_size = 1024 * 1024
+    chunks = []
+    total = 0
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _write_bytes(path: str, data: bytes) -> None:
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+def _run_upload_job(job_id: str, epub_path: str, book_dir: str) -> None:
+    """Background worker: parse + pickle an uploaded epub into a scratch
+    directory first, only swapping the result into `book_dir` once processing
+    has fully succeeded.
+
+    process_epub() unconditionally wipes book_dir/images/ early on, well
+    before it has finished validating the new file (chapter/TOC parsing
+    happens after). Running it straight against `book_dir` would mean a
+    malformed "reprocess" upload -- one that opens fine as a zip but chokes
+    later -- permanently breaks the previously-working book's images, with
+    only a transient in-memory job error to show for it. Processing into a
+    throwaway directory first means a failure leaves `book_dir` (and its
+    state.json, which nothing here ever touches) exactly as it was.
+    """
+    tmp_dir = tempfile.mkdtemp(prefix="upload_", dir=os.path.dirname(book_dir) or ".")
+    try:
+        book = process_epub(epub_path, tmp_dir)
+        save_to_pickle(book, tmp_dir)
+    except Exception as e:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        upload_jobs.mark_error(job_id, str(e))
+        return
+
+    os.makedirs(book_dir, exist_ok=True)
+    new_images = os.path.join(tmp_dir, "images")
+    old_images = os.path.join(book_dir, "images")
+    if os.path.isdir(new_images):
+        if os.path.isdir(old_images):
+            shutil.rmtree(old_images)
+        shutil.move(new_images, old_images)
+    shutil.move(os.path.join(tmp_dir, "book.pkl"), os.path.join(book_dir, "book.pkl"))
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # Reprocessing an existing book_id can change its content/chapter count,
+    # so both caches (keyed by book_id) must drop their stale entries -- not
+    # just load_book_cached -- or reading state math would use old lengths.
+    load_book_cached.cache_clear()
+    chapter_lengths.cache_clear()
+    upload_jobs.mark_done(job_id)
+
+
+@app.post("/api/upload", status_code=202)
+async def upload_book(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    confirm: bool = Form(False),
+):
+    """Upload an .epub, save it into the library, and process it in the
+    background. Returns a job id immediately; poll /api/upload-status/{job_id}
+    for completion. A filename that collides with an existing book_id is
+    rejected (409) unless `confirm` is set, in which case it's reprocessed in
+    place -- same as re-running reader3.py on an already-processed book."""
+    error = upload_jobs.validate_filename(file.filename or "")
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+
+    # Check the (cheap) collision case before reading the (possibly large)
+    # upload body at all, so a rejected duplicate doesn't cost a wasted read.
+    book_id = upload_jobs.derive_book_id(file.filename)
+    book_dir = _book_dir(book_id)
+    collides = os.path.exists(os.path.join(book_dir, "book.pkl"))
+    if collides and not confirm:
+        existing = load_book_cached(book_id)
+        title = existing.metadata.title if existing else book_id
+        raise HTTPException(status_code=409, detail={"book_id": book_id, "title": title})
+
+    contents = await _read_with_limit(file, upload_jobs.MAX_UPLOAD_BYTES)
+    if contents is None:
+        mb = upload_jobs.MAX_UPLOAD_BYTES // (1024 * 1024)
+        raise HTTPException(status_code=400, detail=f"File is too large (max {mb}MB).")
+
+    job = upload_jobs.try_create_job(book_id=book_id, filename=os.path.basename(file.filename))
+    if job is None:
+        raise HTTPException(status_code=429, detail="This book is already being processed.")
+
+    os.makedirs(BOOKS_DIR, exist_ok=True)
+    epub_path = os.path.join(BOOKS_DIR, job.filename)
+    await run_in_threadpool(_write_bytes, epub_path, contents)
+
+    background_tasks.add_task(_run_upload_job, job.id, epub_path, book_dir)
+    return {"job_id": job.id, "book_id": book_id}
+
+
+@app.get("/api/upload-status/{job_id}")
+async def upload_status(job_id: str):
+    job = upload_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"status": job.status, "book_id": job.book_id, "error": job.error}
 
 
 # --- Obsidian sync ---
