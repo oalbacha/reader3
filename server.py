@@ -119,6 +119,32 @@ class NoteBody(BaseModel):
     text: str
 
 
+def _card_data(item: str, book: Book, state: ReadingState) -> dict:
+    """Shape one book's data for a library card. Shared by the library/
+    archive views (_scan_books) and the single-book lookup the upload UI
+    polls after a job finishes (GET /api/book/{book_id})."""
+    highlights = state.highlights
+    # Sort by book/spine order (not creation order) so the list reads
+    # front-to-back like the book, matching /api/export.
+    highlights_list = sorted(highlights, key=lambda h: h.get("chapter", 0))
+    cover_image = getattr(book, "cover_image", None)
+    resume_chapter, _resume_scroll = state.resume_position()
+    return {
+        "id": item,
+        "title": book.metadata.title,
+        "author": ", ".join(book.metadata.authors),
+        "chapters": len(book.spine),
+        "status": state.derive_status(),
+        "progress": round(state.progress * 100),
+        "highlights": len(highlights),
+        "highlights_list": highlights_list,
+        # Where "Continue" should reopen: the earliest chapter that
+        # isn't fully read yet, not just wherever was last opened.
+        "resume_chapter": resume_chapter,
+        "cover_url": f"/read/{item}/{cover_image}" if cover_image else None,
+    }
+
+
 def _scan_books(archived: bool) -> list:
     """Scan BOOKS_DIR for processed book folders and build the card list,
     keeping only books whose `archived` flag matches. Shared by the library
@@ -135,26 +161,7 @@ def _scan_books(archived: bool) -> list:
                     state = _load_state(item)
                     if state.archived != archived:
                         continue
-                    highlights = state.highlights
-                    # Sort by book/spine order (not creation order) so the list
-                    # reads front-to-back like the book, matching /api/export.
-                    highlights_list = sorted(highlights, key=lambda h: h.get("chapter", 0))
-                    cover_image = getattr(book, "cover_image", None)
-                    resume_chapter, _resume_scroll = state.resume_position()
-                    books.append({
-                        "id": item,
-                        "title": book.metadata.title,
-                        "author": ", ".join(book.metadata.authors),
-                        "chapters": len(book.spine),
-                        "status": state.derive_status(),
-                        "progress": round(state.progress * 100),
-                        "highlights": len(highlights),
-                        "highlights_list": highlights_list,
-                        # Where "Continue" should reopen: the earliest chapter that
-                        # isn't fully read yet, not just wherever was last opened.
-                        "resume_chapter": resume_chapter,
-                        "cover_url": f"/read/{item}/{cover_image}" if cover_image else None,
-                    })
+                    books.append(_card_data(item, book, state))
 
     # Show in-progress books first, then new, then finished.
     order = {"in_progress": 0, "new": 1, "read": 2}
@@ -270,6 +277,18 @@ def _require_book(book_id: str) -> Book:
 def _book_dir(book_id: str) -> str:
     """Resolve a book folder inside BOOKS_DIR, guarding against path escapes."""
     return os.path.join(BOOKS_DIR, os.path.basename(book_id))
+
+
+@app.get("/api/book/{book_id}", response_class=HTMLResponse)
+async def get_book_card(request: Request, book_id: str):
+    """Rendered card HTML for one book -- reuses the same render_book_card
+    macro as the library grid (templates/_book_card.html), so the upload UI's
+    placeholder-to-real-card swap never has to keep a second, JS-side copy of
+    the card markup in sync with the server-rendered one."""
+    book = _require_book(book_id)
+    state = _load_state(book_id)
+    card = _card_data(book_id, book, state)
+    return templates.TemplateResponse("_book_card_fragment.html", {"request": request, "book": card})
 
 
 @app.get("/api/state/{book_id}")
@@ -470,22 +489,31 @@ def _run_upload_job(job_id: str, epub_path: str, book_dir: str) -> None:
     """
     tmp_dir = tempfile.mkdtemp(prefix="upload_", dir=os.path.dirname(book_dir) or ".")
     try:
-        book = process_epub(epub_path, tmp_dir)
-        save_to_pickle(book, tmp_dir)
-    except Exception as e:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        upload_jobs.mark_error(job_id, str(e))
-        return
+        try:
+            book = process_epub(epub_path, tmp_dir)
+            save_to_pickle(book, tmp_dir)
 
-    os.makedirs(book_dir, exist_ok=True)
-    new_images = os.path.join(tmp_dir, "images")
-    old_images = os.path.join(book_dir, "images")
-    if os.path.isdir(new_images):
-        if os.path.isdir(old_images):
-            shutil.rmtree(old_images)
-        shutil.move(new_images, old_images)
-    shutil.move(os.path.join(tmp_dir, "book.pkl"), os.path.join(book_dir, "book.pkl"))
-    shutil.rmtree(tmp_dir, ignore_errors=True)
+            os.makedirs(book_dir, exist_ok=True)
+            new_images = os.path.join(tmp_dir, "images")
+            old_images = os.path.join(book_dir, "images")
+            if os.path.isdir(new_images):
+                if os.path.isdir(old_images):
+                    shutil.rmtree(old_images)
+                shutil.move(new_images, old_images)
+            shutil.move(os.path.join(tmp_dir, "book.pkl"), os.path.join(book_dir, "book.pkl"))
+        except Exception as e:
+            # A file with no matching book_dir/book.pkl is orphaned junk --
+            # nothing in the library scan or UI can ever surface or clean it
+            # up, so remove it rather than leaving it to accumulate silently.
+            if not os.path.exists(os.path.join(book_dir, "book.pkl")):
+                try:
+                    os.remove(epub_path)
+                except OSError:
+                    pass
+            upload_jobs.mark_error(job_id, str(e))
+            return
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # Reprocessing an existing book_id can change its content/chapter count,
     # so both caches (keyed by book_id) must drop their stale entries -- not

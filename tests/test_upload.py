@@ -120,6 +120,42 @@ def test_upload_job_marks_error_for_corrupt_epub(client, books_dir, tmp_path):
     assert status["error"]
 
 
+def test_failed_new_upload_removes_orphaned_source_file(client, books_dir, tmp_path):
+    """A brand-new upload that fails never gets a book_dir/book.pkl, so
+    nothing in the library scan or UI can ever surface or clean up its source
+    .epub -- it must not be left behind to accumulate."""
+    resp = _upload(client, "junk.epub", b"not a real epub file")
+    job_id = resp.json()["job_id"]
+    client.get(f"/api/upload-status/{job_id}")  # background task runs synchronously under TestClient
+
+    assert not os.path.exists(os.path.join(str(books_dir), "junk.epub"))
+
+
+def test_swap_failure_marks_job_error_and_clears_in_flight_guard(client, books_dir, tmp_path, monkeypatch):
+    """If the post-processing swap itself fails (disk full, permission error)
+    after process_epub/save_to_pickle already succeeded in the scratch dir,
+    the job must still end up 'error' (not stuck 'processing' forever) and
+    the in-flight guard must still release -- otherwise every future upload
+    for this book_id 429s until the server restarts."""
+    real_move = server.shutil.move
+
+    def boom(*args, **kwargs):
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(server.shutil, "move", boom)
+
+    content = _epub_bytes(tmp_path, title="Swap Failure")
+    resp = _upload(client, "swap_fail.epub", content)
+    job_id = resp.json()["job_id"]
+
+    status = client.get(f"/api/upload-status/{job_id}").json()
+    assert status["status"] == "error"
+
+    monkeypatch.setattr(server.shutil, "move", real_move)
+    retry = _upload(client, "swap_fail.epub", content)
+    assert retry.status_code == 202
+
+
 def test_failed_reprocess_leaves_existing_book_dir_untouched(client, books_dir, tmp_path, monkeypatch):
     """A confirmed reprocess that fails mid-parse must not corrupt the
     already-working book: process_epub() wipes book_dir/images/ before it has

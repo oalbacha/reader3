@@ -1,0 +1,19 @@
+{% macro render_book_card(book) %}
+{% set start = book.resume_chapter if book.status == "in_progress" else 0 %}
+<div class="book-card" data-book-id="{{ book.id }}" data-title="{{ book.title }}"
+     data-href="/read/{{ book.id }}/{{ start }}" data-status="{{ book.status }}"
+     data-highlights="{{ book.highlights_list | tojson | forceescape }}">
+    {% if book.cover_url %}
+        <img class="book-cover" src="{{ book.cover_url }}" alt="" loading="lazy">
+    {% else %}
+        <div class="book-cover book-cover-placeholder">📖</div>
+    {% endif %}
+
+    <div class="card-meta-row">
+        <span class="progress-text{{ ' new-badge' if book.status == 'new' else '' }}" data-role="progress-text">
+            {{ 'NEW' if book.status == 'new' else (book.progress ~ '%') }}
+        </span>
+        <button type="button" class="kebab-btn" data-role="menu-toggle" title="More">•••</button>
+    </div>
+</div>
+{% endmacro %}

@@ -1,3 +1,4 @@
+{% from "_book_card.html" import render_book_card %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -28,6 +29,24 @@
                       border-radius: 4px; box-shadow: 0 2px 10px var(--shadow); transition: transform 0.15s ease, box-shadow 0.15s ease; }
         .book-card:hover .book-cover { transform: translateY(-2px); box-shadow: 0 8px 20px var(--shadow); }
         .book-cover-placeholder { display: flex; align-items: center; justify-content: center; font-size: 2.4em; color: var(--text-muted); }
+
+        /* "+ Add Book" tile: same card shape as a book, dashed cover instead
+           of art, opens the file picker or accepts a drop. */
+        .add-book-cover { border: 2px dashed var(--border-strong); background: transparent; box-shadow: none; font-weight: 300; }
+        .add-book-tile:hover .add-book-cover { border-color: var(--text-muted); transform: none; box-shadow: none; }
+
+        /* Whole-grid drop target highlight while a drag is over it. */
+        .book-grid.drag-over { outline: 2px dashed var(--accent); outline-offset: 8px; border-radius: 8px; }
+
+        /* Upload placeholder: same card shape, not clickable, spinner instead
+           of cover art while its background job runs. */
+        .book-card.placeholder { cursor: default; }
+        .book-card.placeholder .book-cover { box-shadow: none; }
+        .book-card.placeholder:hover .book-cover { transform: none; }
+        .upload-spinner { width: 22px; height: 22px; border-radius: 50%;
+                           border: 2px solid var(--border-strong); border-top-color: var(--accent);
+                           animation: upload-spin 0.8s linear infinite; }
+        @keyframes upload-spin { to { transform: rotate(360deg); } }
 
         /* Meta row: percentage (or a "NEW" badge) on the left, "..." menu on
            the right -- no card box, no "% read" wording, no status text. */
@@ -112,29 +131,22 @@
             {% if archive_mode %}
                 <p>No archived books.</p>
             {% else %}
-                <p>No processed books found. Run <code>reader3.py</code> on an epub first.</p>
+                <p id="empty-library-message">No books yet — click "Add Book" below, or drop an .epub onto this page.</p>
             {% endif %}
         {% endif %}
 
-        <div class="book-grid">
-            {% for book in books %}
-            {% set start = book.resume_chapter if book.status == "in_progress" else 0 %}
-            <div class="book-card" data-book-id="{{ book.id }}" data-title="{{ book.title }}"
-                 data-href="/read/{{ book.id }}/{{ start }}" data-status="{{ book.status }}"
-                 data-highlights="{{ book.highlights_list | tojson | forceescape }}">
-                {% if book.cover_url %}
-                    <img class="book-cover" src="{{ book.cover_url }}" alt="" loading="lazy">
-                {% else %}
-                    <div class="book-cover book-cover-placeholder">📖</div>
-                {% endif %}
-
+        <div class="book-grid" id="book-grid">
+            {% if not archive_mode %}
+            <div class="book-card add-book-tile" id="add-book-tile" title="Add Book">
+                <div class="book-cover book-cover-placeholder add-book-cover">＋</div>
                 <div class="card-meta-row">
-                    <span class="progress-text{{ ' new-badge' if book.status == 'new' else '' }}" data-role="progress-text">
-                        {{ 'NEW' if book.status == 'new' else (book.progress ~ '%') }}
-                    </span>
-                    <button type="button" class="kebab-btn" data-role="menu-toggle" title="More">•••</button>
+                    <span class="progress-text">Add Book</span>
                 </div>
             </div>
+            <input type="file" id="add-book-input" accept=".epub" multiple hidden>
+            {% endif %}
+            {% for book in books %}
+                {{ render_book_card(book) }}
             {% endfor %}
         </div>
     </div>
@@ -333,20 +345,24 @@
                 }).catch(() => toast('Could not delete'));
         });
 
-        document.querySelectorAll('.book-card').forEach(card => {
-            // ---- Click anywhere on the card to open the book ----
+        // Wires a real book card's standard behavior (open on click, "..."
+        // menu). Shared between the server-rendered cards below and any card
+        // the upload flow builds client-side once a job finishes -- never
+        // called on the "+ Add Book" tile or an upload placeholder, neither
+        // of which have a menu-toggle button.
+        function wireCard(card) {
             card.addEventListener('click', () => {
                 window.location.href = card.dataset.href;
             });
-
-            // ---- "..." menu toggle ----
             card.querySelector('[data-role="menu-toggle"]').addEventListener('click', (e) => {
                 e.stopPropagation();
                 const wasOpenForThisCard = menuCard === card && cardMenu.style.display === 'block';
                 closeCardMenu();
                 if (!wasOpenForThisCard) openCardMenu(card, e.currentTarget);
             });
-        });
+        }
+
+        document.querySelectorAll('.book-card:not(.add-book-tile)').forEach(wireCard);
 
         // Shared menu's own click shouldn't bubble to the document-level closer.
         cardMenu.addEventListener('click', (e) => e.stopPropagation());
@@ -413,6 +429,132 @@
                     toast('Book removed');
                 }).catch(() => toast('Could not remove book'));
         });
+
+        // ---- Upload: "+ Add Book" tile + drag-and-drop onto the grid ----
+        // Absent in archive mode (no tile rendered there), so every handler
+        // below is gated on addTile existing.
+        const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // keep in sync with upload_jobs.MAX_UPLOAD_BYTES
+        const addTile = document.getElementById('add-book-tile');
+        const addInput = document.getElementById('add-book-input');
+        const bookGrid = document.getElementById('book-grid');
+
+        function createPlaceholderCard(filename) {
+            const card = document.createElement('div');
+            card.className = 'book-card placeholder';
+            card.title = filename;
+
+            const cover = document.createElement('div');
+            cover.className = 'book-cover book-cover-placeholder';
+            cover.appendChild(document.createElement('span')).className = 'upload-spinner';
+            card.appendChild(cover);
+
+            const metaRow = document.createElement('div');
+            metaRow.className = 'card-meta-row';
+            const label = document.createElement('span');
+            label.className = 'progress-text';
+            label.textContent = 'Processing…';
+            metaRow.appendChild(label);
+            card.appendChild(metaRow);
+
+            return card;
+        }
+
+        // The server renders the real card HTML from the exact same
+        // render_book_card macro used for the library grid itself
+        // (templates/_book_card.html via GET /api/book/{id}), so this never
+        // has to keep a second, JS-side copy of the card markup in sync.
+        function replacePlaceholderWithCard(placeholder, bookId, filename) {
+            fetch('/api/book/' + bookId)
+                .then(r => { if (!r.ok) throw new Error(); return r.text(); })
+                .then(html => {
+                    const template = document.createElement('template');
+                    template.innerHTML = html.trim();
+                    const card = template.content.firstElementChild;
+                    placeholder.replaceWith(card);
+                    wireCard(card);
+                    const emptyMsg = document.getElementById('empty-library-message');
+                    if (emptyMsg) emptyMsg.remove();
+                })
+                .catch(() => {
+                    toast('"' + filename + '" was processed, but the library couldn’t refresh — reload to see it.');
+                    placeholder.remove();
+                });
+        }
+
+        function pollUploadJob(jobId, placeholder, filename) {
+            const poll = () => {
+                fetch('/api/upload-status/' + jobId)
+                    .then(r => r.json())
+                    .then(status => {
+                        if (status.status === 'processing') {
+                            setTimeout(poll, 1500);
+                        } else if (status.status === 'done') {
+                            replacePlaceholderWithCard(placeholder, status.book_id, filename);
+                        } else {
+                            toast(status.error ? ('"' + filename + '": ' + status.error) : ('Could not process "' + filename + '"'));
+                            placeholder.remove();
+                        }
+                    })
+                    .catch(() => setTimeout(poll, 1500)); // transient network blip -- keep polling
+            };
+            poll();
+        }
+
+        function uploadFile(file) {
+            if (!file.name.toLowerCase().endsWith('.epub')) {
+                toast('"' + file.name + '" isn’t an .epub file');
+                return;
+            }
+            if (file.size > MAX_UPLOAD_BYTES) {
+                toast('"' + file.name + '" is too large (max ' + (MAX_UPLOAD_BYTES / (1024 * 1024)) + 'MB)');
+                return;
+            }
+
+            const placeholder = createPlaceholderCard(file.name);
+            addTile.insertAdjacentElement('afterend', placeholder);
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            fetch('/api/upload', {method: 'POST', body: formData})
+                .then(async (resp) => {
+                    if (!resp.ok) {
+                        const body = await resp.json().catch(() => ({}));
+                        const message = typeof body.detail === 'string' ? body.detail : ('Could not process "' + file.name + '"');
+                        throw new Error(message);
+                    }
+                    return resp.json();
+                })
+                .then(({job_id}) => pollUploadJob(job_id, placeholder, file.name))
+                .catch((err) => {
+                    toast(err.message || ('Could not upload "' + file.name + '"'));
+                    placeholder.remove();
+                });
+        }
+
+        function handleFiles(fileList) {
+            Array.from(fileList).forEach(uploadFile);
+        }
+
+        if (addTile) {
+            addTile.addEventListener('click', () => addInput.click());
+            addInput.addEventListener('change', () => {
+                handleFiles(addInput.files);
+                addInput.value = ''; // allow re-selecting the same file(s) later
+            });
+
+            ['dragenter', 'dragover'].forEach(evt => bookGrid.addEventListener(evt, (e) => {
+                e.preventDefault();
+                bookGrid.classList.add('drag-over');
+            }));
+            ['dragleave', 'drop'].forEach(evt => bookGrid.addEventListener(evt, (e) => {
+                e.preventDefault();
+                bookGrid.classList.remove('drag-over');
+            }));
+            bookGrid.addEventListener('drop', (e) => {
+                if (e.dataTransfer && e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+            });
+        }
     </script>
 </body>
 </html>

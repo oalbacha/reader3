@@ -82,3 +82,18 @@ def test_try_create_job_allows_new_job_after_previous_one_errors():
 
     second = upload_jobs.try_create_job(book_id="errored_data", filename="errored.epub")
     assert second is not None
+
+
+def test_try_create_job_treats_case_variants_as_the_same_in_flight_target():
+    """Book_data and book_data would land in the same physical directory on
+    a case-insensitive filesystem (the default on macOS/Windows), so the
+    in-flight lock must not let both race process_epub concurrently."""
+    first = upload_jobs.try_create_job(book_id="Casey_data", filename="Casey.epub")
+    assert first is not None
+
+    second = upload_jobs.try_create_job(book_id="casey_data", filename="casey.epub")
+    assert second is None
+
+    upload_jobs.mark_done(first.id)
+    third = upload_jobs.try_create_job(book_id="CASEY_data", filename="CASEY.epub")
+    assert third is not None

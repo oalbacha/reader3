@@ -57,6 +57,15 @@ def validate_filename(filename: str) -> Optional[str]:
     return None
 
 
+def _in_flight_key(book_id: str) -> str:
+    """Case-folded so two book_ids that differ only in case (e.g. "Book_data"
+    vs "book_data") are treated as the same in-flight target. They'd land in
+    the same physical book_dir on any case-insensitive filesystem -- the
+    default on macOS and Windows -- so tracking them as distinct entries here
+    would defeat the whole point of this lock."""
+    return book_id.casefold()
+
+
 def try_create_job(book_id: str, filename: str) -> Optional[UploadJob]:
     """Atomically start a job for `book_id`, unless one is already in flight
     for it -- returns None in that case. Without this, two uploads racing for
@@ -64,12 +73,13 @@ def try_create_job(book_id: str, filename: str) -> Optional[UploadJob]:
     that happen to share a filename) could both pass the caller's collision
     check and then run process_epub/save_to_pickle against the same book_dir
     concurrently, corrupting it."""
+    key = _in_flight_key(book_id)
     with _lock:
-        if book_id in _in_flight_book_ids:
+        if key in _in_flight_book_ids:
             return None
         job = UploadJob(id=uuid.uuid4().hex, filename=filename, book_id=book_id)
         _jobs[job.id] = job
-        _in_flight_book_ids.add(book_id)
+        _in_flight_book_ids.add(key)
         return job
 
 
@@ -83,7 +93,7 @@ def mark_done(job_id: str) -> None:
         job = _jobs.get(job_id)
         if job:
             job.status = "done"
-            _in_flight_book_ids.discard(job.book_id)
+            _in_flight_book_ids.discard(_in_flight_key(job.book_id))
 
 
 def mark_error(job_id: str, message: str) -> None:
@@ -92,4 +102,4 @@ def mark_error(job_id: str, message: str) -> None:
         if job:
             job.status = "error"
             job.error = message
-            _in_flight_book_ids.discard(job.book_id)
+            _in_flight_book_ids.discard(_in_flight_key(job.book_id))
