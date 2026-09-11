@@ -183,6 +183,27 @@ def test_failed_reprocess_leaves_existing_book_dir_untouched(client, books_dir, 
     assert after == before
 
 
+def test_reprocessing_an_archived_book_leaves_it_archived(client, books_dir, tmp_path):
+    """Reprocess-in-place must never touch state.json's archived flag --
+    the upload UI (#16) relies on /api/book/{id} still reporting archived
+    after a confirmed reprocess to avoid showing it on the main library page."""
+    original = _epub_bytes(tmp_path, name="v1.epub", title="Original")
+    first = _upload(client, "archived_book.epub", original)
+    book_id = first.json()["book_id"]
+
+    client.post(f"/api/archive/{book_id}", json={"archived": True})
+
+    updated = _epub_bytes(tmp_path, name="v2.epub", title="Updated")
+    second = _upload(client, "archived_book.epub", updated, confirm=True)
+    assert second.status_code == 202
+    status = client.get(f"/api/upload-status/{second.json()['job_id']}").json()
+    assert status["status"] == "done"
+
+    html = client.get(f"/api/book/{book_id}").text
+    assert 'data-archived="true"' in html
+    assert 'data-title="Updated"' in html
+
+
 def test_upload_for_book_id_already_in_flight_is_rejected(client, books_dir, tmp_path):
     """Guards against two concurrent uploads (e.g. a double-submitted
     confirm, or two tabs) racing process_epub/save_to_pickle against the same

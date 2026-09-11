@@ -142,6 +142,12 @@ def _card_data(item: str, book: Book, state: ReadingState) -> dict:
         # isn't fully read yet, not just wherever was last opened.
         "resume_chapter": resume_chapter,
         "cover_url": f"/read/{item}/{cover_image}" if cover_image else None,
+        # _scan_books already filters by archived before this is ever called,
+        # so server-rendered cards never need it -- but GET /api/book/{id}
+        # (used after a confirmed reprocess) can target a book that's
+        # archived, and the upload UI needs to know that to avoid splicing an
+        # archived book's card into the non-archived library page.
+        "archived": state.archived,
     }
 
 

@@ -2,6 +2,7 @@
 {% set start = book.resume_chapter if book.status == "in_progress" else 0 %}
 <div class="book-card" data-book-id="{{ book.id }}" data-title="{{ book.title }}"
      data-href="/read/{{ book.id }}/{{ start }}" data-status="{{ book.status }}"
+     data-archived="{{ 'true' if book.archived else 'false' }}"
      data-highlights="{{ book.highlights_list | tojson | forceescape }}">
     {% if book.cover_url %}
         <img class="book-cover" src="{{ book.cover_url }}" alt="" loading="lazy">

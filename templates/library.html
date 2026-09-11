@@ -470,6 +470,26 @@
                     const template = document.createElement('template');
                     template.innerHTML = html.trim();
                     const card = template.content.firstElementChild;
+
+                    // A confirmed reprocess can target a book that's archived
+                    // (e.g. reprocessing an old upload from the main library
+                    // page). This page only ever shows non-archived books, so
+                    // splicing that card in here would show a book that's
+                    // supposed to be hidden until the next reload re-filters it.
+                    if (card.dataset.archived === 'true') {
+                        placeholder.remove();
+                        toast('"' + filename + '" was updated — it stays archived.');
+                        return;
+                    }
+
+                    // A confirmed reprocess targets a book_id that may already
+                    // be showing as a real card elsewhere in the grid (this
+                    // isn't necessarily a brand-new upload) -- drop that stale
+                    // copy so the reprocessed book doesn't end up duplicated.
+                    bookGrid.querySelectorAll('.book-card:not(.placeholder):not(.add-book-tile)').forEach(existing => {
+                        if (existing.dataset.bookId === bookId) existing.remove();
+                    });
+
                     placeholder.replaceWith(card);
                     wireCard(card);
                     const emptyMsg = document.getElementById('empty-library-message');
@@ -500,6 +520,46 @@
             poll();
         }
 
+        // Submits one upload attempt. On a 409 collision (the target book_id
+        // already exists) with `confirm` not yet set, asks the user before
+        // resubmitting with confirm=true to reprocess in place -- rather than
+        // await-ing each file's fetch in turn, every file's own fetch runs
+        // concurrently (non-colliding files start processing immediately per
+        // #15/#16's spec) and window.confirm's blocking nature is what makes
+        // several colliding files in one batch queue up one dialog at a time,
+        // for free, with no extra queuing logic needed.
+        function submitUpload(file, placeholder, confirmReprocess) {
+            const formData = new FormData();
+            formData.append('file', file);
+            if (confirmReprocess) formData.append('confirm', 'true');
+
+            fetch('/api/upload', {method: 'POST', body: formData})
+                .then(async (resp) => {
+                    if (resp.status === 409 && !confirmReprocess) {
+                        const body = await resp.json().catch(() => ({}));
+                        const title = (body.detail && body.detail.title) || file.name;
+                        if (window.confirm('A book named "' + title + '" already exists — reprocess it?')) {
+                            return submitUpload(file, placeholder, true);
+                        }
+                        placeholder.remove();
+                        return null;
+                    }
+                    if (!resp.ok) {
+                        const body = await resp.json().catch(() => ({}));
+                        const message = typeof body.detail === 'string' ? body.detail : ('Could not process "' + file.name + '"');
+                        throw new Error(message);
+                    }
+                    return resp.json();
+                })
+                .then((result) => {
+                    if (result) pollUploadJob(result.job_id, placeholder, file.name);
+                })
+                .catch((err) => {
+                    toast(err.message || ('Could not upload "' + file.name + '"'));
+                    placeholder.remove();
+                });
+        }
+
         function uploadFile(file) {
             if (!file.name.toLowerCase().endsWith('.epub')) {
                 toast('"' + file.name + '" isn’t an .epub file');
@@ -512,24 +572,7 @@
 
             const placeholder = createPlaceholderCard(file.name);
             addTile.insertAdjacentElement('afterend', placeholder);
-
-            const formData = new FormData();
-            formData.append('file', file);
-
-            fetch('/api/upload', {method: 'POST', body: formData})
-                .then(async (resp) => {
-                    if (!resp.ok) {
-                        const body = await resp.json().catch(() => ({}));
-                        const message = typeof body.detail === 'string' ? body.detail : ('Could not process "' + file.name + '"');
-                        throw new Error(message);
-                    }
-                    return resp.json();
-                })
-                .then(({job_id}) => pollUploadJob(job_id, placeholder, file.name))
-                .catch((err) => {
-                    toast(err.message || ('Could not upload "' + file.name + '"'));
-                    placeholder.remove();
-                });
+            submitUpload(file, placeholder, false);
         }
 
         function handleFiles(fileList) {

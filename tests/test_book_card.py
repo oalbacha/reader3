@@ -31,3 +31,17 @@ def test_get_book_card_reflects_progress_and_highlights(client, fixture_book):
 def test_get_book_card_404_for_unknown_book(client, books_dir):
     resp = client.get("/api/book/does-not-exist_data")
     assert resp.status_code == 404
+
+
+def test_get_book_card_marks_archived_state_for_upload_ui_to_check(client, fixture_book):
+    """The upload UI (#16) uses this to avoid splicing an archived book's
+    card into the non-archived library page after a confirmed reprocess."""
+    book_id, _book, _lengths = fixture_book
+
+    html = client.get(f"/api/book/{book_id}").text
+    assert 'data-archived="false"' in html
+
+    client.post(f"/api/archive/{book_id}", json={"archived": True})
+
+    html = client.get(f"/api/book/{book_id}").text
+    assert 'data-archived="true"' in html
