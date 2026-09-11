@@ -4,7 +4,7 @@
 
 ### Issue tracker
 
-Issues and specs live as markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+Issues live on GitHub (`gh issue` / the repo's Issues tab) — no local markdown tracker.
 
 ### Triage labels
 
