@@ -197,7 +197,7 @@
 
                        BETTER FIX: Use JavaScript to match filenames.
                     -->
-                    <a href="#" onclick="findAndGo('{{ item.file_href }}')"
+                    <a href="#" onclick="findAndGo('{{ item.href }}')"
                        class="toc-link {% if is_active %}active{% endif %}">
                         {{ item.title }}
                     </a>
@@ -271,13 +271,22 @@
         };
 
         function findAndGo(filename) {
-            const cleanFile = filename.split('#')[0];
+            const [cleanFile, anchor] = filename.split('#');
             const idx = spineMap[cleanFile];
-            if (idx !== undefined) {
-                window.location.href = "/read/{{ book_id }}/" + idx;
-            } else {
+            if (idx === undefined) {
                 console.log("Could not find index for", filename);
+                return;
             }
+            if (idx === CHAPTER_INDEX) {
+                // Same chapter: setting location.href with only the fragment
+                // changed doesn't fire a page load, so jump there by hand.
+                if (anchor) {
+                    history.replaceState(null, '', '#' + anchor);
+                    scrollToAnchor();
+                }
+                return;
+            }
+            window.location.href = "/read/{{ book_id }}/" + idx + (anchor ? "#" + anchor : "");
         }
 
         // ---- Small utilities ----
@@ -345,17 +354,36 @@
         });
         window.addEventListener('beforeunload', () => postProgress(true));
 
+        // Jump straight to a TOC subsection's anchor within the chapter, if the
+        // URL was given one (see findAndGo) -- #main is its own scroll container,
+        // so the browser's native fragment-scroll (which only targets the
+        // document viewport) doesn't reach it; this does it by hand.
+        function scrollToAnchor() {
+            const hash = decodeURIComponent(window.location.hash.slice(1));
+            if (!hash) return false;
+            const el = document.getElementById(hash);
+            if (!el) return false;
+            main.scrollTo({top: el.offsetTop, behavior: 'instant'});
+            return true;
+        }
+
         // Restore scroll position when returning to the chapter we left off in.
         // Wait for full load (images affect scrollHeight) so the fraction maps
         // to the right pixel offset.
         function restoreScroll() {
-            if (CHAPTER_INDEX === RESUME_CHAPTER && RESUME_SCROLL > 0) {
+            // An explicit anchor (from clicking a TOC subsection) always wins over
+            // resuming wherever this chapter's own scroll fraction last left off.
+            if (!scrollToAnchor() && CHAPTER_INDEX === RESUME_CHAPTER && RESUME_SCROLL > 0) {
                 const scrollable = main.scrollHeight - main.clientHeight;
-                if (scrollable > 0) main.scrollTop = RESUME_SCROLL * scrollable;
+                if (scrollable > 0) main.scrollTo({top: RESUME_SCROLL * scrollable, behavior: 'instant'});
             }
-            updateTopProgress();
-            // Record current position (also covers short chapters that never scroll).
-            postProgress(false);
+            // scrollTo() doesn't apply synchronously -- wait a tick so these read
+            // the post-scroll position instead of racing it.
+            setTimeout(() => {
+                updateTopProgress();
+                // Record current position (also covers short chapters that never scroll).
+                postProgress(false);
+            }, 50);
         }
         if (document.readyState === 'complete') {
             restoreScroll();
