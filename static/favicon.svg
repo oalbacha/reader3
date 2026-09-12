@@ -1,8 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <!-- Lucide "library" icon (https://lucide.dev, ISC License), colored to match the accent color in static/theme.css. -->
-    <style>
-        path { stroke: #3498db; }
-        @media (prefers-color-scheme: dark) { path { stroke: #5dade2; } }
-    </style>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#36454F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Lucide "library" icon (https://lucide.dev, ISC License): charcoal stroke over a light gray rounded background so it stays visible against a dark browser tab bar too. -->
+    <rect width="24" height="24" rx="5" fill="#d8d5d0" stroke="none"/>
     <path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/>
 </svg>
