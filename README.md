@@ -22,6 +22,25 @@ uv run server.py
 
 And visit [localhost:8123](http://localhost:8123/) to see your current Library. You can easily add more books, or delete them from your library by deleting the folder. It's not supposed to be complicated or complex.
 
+### Running with a virtual environment (pip)
+
+If you'd rather not use `uv`, you can run everything with a standard Python virtual environment and `requirements.txt`:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate  # on Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+Then, same as above, register a book and run the server:
+
+```bash
+python reader3.py library/dracula.epub
+python server.py
+```
+
+Visit [localhost:8123](http://localhost:8123/) to see your Library. Deactivate the virtual environment when you're done with `deactivate`.
+
 ## License
 
 MIT
